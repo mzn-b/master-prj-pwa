@@ -1,0 +1,4 @@
+:root { color-scheme: dark; }
+body { margin: 0; background: #0b1020; color: #e5e7eb; }
+button, select { padding: 8px 10px; border-radius: 8px; border: 1px solid #374151; background: #111827; color: #e5e7eb; }
+button:disabled, select:disabled { opacity: 0.6; }

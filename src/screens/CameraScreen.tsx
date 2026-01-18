@@ -22,6 +22,18 @@ export function CameraScreen() {
 
         try {
             // M1: Kamera + Live Preview
+            // Check for secure context (HTTPS required on mobile)
+            if (!navigator.mediaDevices?.getUserMedia) {
+                if (window.location.protocol === "http:" && window.location.hostname !== "localhost") {
+                    throw new Error(
+                        "Kamerazugriff erfordert HTTPS. Bitte die Seite über HTTPS aufrufen."
+                    );
+                }
+                throw new Error(
+                    "Kamerazugriff wird von diesem Browser nicht unterstützt."
+                );
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: "user" },
                 audio: false,
@@ -143,6 +155,25 @@ export function CameraScreen() {
                     overflow: "hidden",
                 }}
             >
+                {!isRunning && (
+                    <div
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#6b7280",
+                            flexDirection: "column",
+                            gap: 8,
+                        }}
+                    >
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+                        </svg>
+                        <span>Drücke Start um die Kamera zu aktivieren</span>
+                    </div>
+                )}
                 <video
                     ref={videoRef}
                     playsInline
@@ -152,13 +183,16 @@ export function CameraScreen() {
                         height: "100%",
                         objectFit: "cover",
                         transform: "scaleX(-1)", // Selfie mirror
+                        display: isRunning ? "block" : "none",
                     }}
                 />
 
                 {/* M4 Overlay */}
-                <div style={{ position: "absolute", inset: 0, transform: "scaleX(-1)" }}>
-                    <OverlayCanvas tracking={tracking} videoEl={videoRef.current} />
-                </div>
+                {isRunning && (
+                    <div style={{ position: "absolute", inset: 0, transform: "scaleX(-1)" }}>
+                        <OverlayCanvas tracking={tracking} videoEl={videoRef.current} />
+                    </div>
+                )}
             </div>
 
             {/* Debug: DTO (optional anzeigen; entfernt werden wenn du es “clean” willst) */}

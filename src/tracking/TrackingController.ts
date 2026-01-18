@@ -22,7 +22,6 @@ export class TrackingController {
     }
 
     static async init(mode: TrackingMode, opts: InitOpts = {}): Promise<TrackingController> {
-        // ✅ Lokal: WASM aus /public/mediapipe/wasm laden
         const fileset = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
 
         const shouldFace = mode === "face" || mode === "combined";
@@ -32,7 +31,6 @@ export class TrackingController {
             shouldFace
                 ? FaceLandmarker.createFromOptions(fileset, {
                     baseOptions: {
-                        // ✅ Lokal: Modell aus /public/mediapipe/models
                         modelAssetPath: "/mediapipe/models/face_landmarker.task",
                     },
                     runningMode: "VIDEO",

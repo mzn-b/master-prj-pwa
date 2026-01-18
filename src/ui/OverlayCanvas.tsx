@@ -16,7 +16,6 @@ export function OverlayCanvas({ tracking, videoEl }: Props) {
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        // Canvas an Video-Displaygröße anpassen
         const w = videoEl.clientWidth;
         const h = videoEl.clientHeight;
         if (w === 0 || h === 0) return;
@@ -30,7 +29,6 @@ export function OverlayCanvas({ tracking, videoEl }: Props) {
 
         if (!tracking) return;
 
-        // Face landmarks
         const faces = tracking.face?.faces ?? [];
         for (const face of faces) {
             for (const p of face.landmarks) {
@@ -38,7 +36,6 @@ export function OverlayCanvas({ tracking, videoEl }: Props) {
             }
         }
 
-        // Hand landmarks
         const hands = tracking.hand?.hands ?? [];
         for (const hand of hands) {
             for (const p of hand.landmarks) {

@@ -21,8 +21,6 @@ export function CameraScreen() {
         setError(null);
 
         try {
-            // M1: Kamera + Live Preview
-            // Check for secure context (HTTPS required on mobile)
             if (!navigator.mediaDevices?.getUserMedia) {
                 if (window.location.protocol === "http:" && window.location.hostname !== "localhost") {
                     throw new Error(
@@ -45,13 +43,11 @@ export function CameraScreen() {
             video.srcObject = stream;
             await video.play();
 
-            // Model initialisieren passend zum Modus (M2/M3)
             const c = await TrackingController.init(mode, { maxFaces: 1, maxHands: 2 });
             setController(c);
 
             setIsRunning(true);
 
-            // M5: Echtzeit loop
             const loop = () => {
                 const v = videoRef.current;
                 if (!v || v.readyState < 2) {
@@ -59,8 +55,8 @@ export function CameraScreen() {
                     return;
                 }
                 const ts = performance.now();
-                const dto = c.detect(v, ts, mode); // M6: einheitliches DTO
-                setTracking(dto); // M4: Overlay nutzt tracking
+                const dto = c.detect(v, ts, mode);
+                setTracking(dto);
 
                 rafRef.current = requestAnimationFrame(loop);
             };
@@ -69,12 +65,11 @@ export function CameraScreen() {
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Unbekannter Fehler beim Start.";
             setError(msg);
-            await stop(); // cleanup
+            await stop();
         }
     }, [mode]);
 
     const stop = useCallback(async () => {
-        // M7: Stop
         setIsRunning(false);
 
         if (rafRef.current != null) {
@@ -100,7 +95,6 @@ export function CameraScreen() {
         setTracking(null);
     }, [controller]);
 
-    // Wenn Modus geändert wird, während läuft: neu starten
     useEffect(() => {
         if (!isRunning) return;
         (async () => {
@@ -182,12 +176,11 @@ export function CameraScreen() {
                         width: "100%",
                         height: "100%",
                         objectFit: "cover",
-                        transform: "scaleX(-1)", // Selfie mirror
+                        transform: "scaleX(-1)",
                         display: isRunning ? "block" : "none",
                     }}
                 />
 
-                {/* M4 Overlay */}
                 {isRunning && (
                     <div style={{ position: "absolute", inset: 0, transform: "scaleX(-1)" }}>
                         <OverlayCanvas tracking={tracking} videoEl={videoRef.current} />
@@ -195,7 +188,6 @@ export function CameraScreen() {
                 )}
             </div>
 
-            {/* Debug: DTO (optional anzeigen; entfernt werden wenn du es “clean” willst) */}
             <details style={{ marginTop: 12 }}>
                 <summary>Letztes TrackingDTO</summary>
                 <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(tracking, null, 2)}</pre>

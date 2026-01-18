@@ -1,8 +1,8 @@
 export type TrackingMode = "face" | "hand" | "combined";
 
 export type NormalizedPoint = {
-    x: number; // 0..1 relativ zum Bild
-    y: number; // 0..1 relativ zum Bild
+    x: number;
+    y: number;
     z?: number;
 };
 

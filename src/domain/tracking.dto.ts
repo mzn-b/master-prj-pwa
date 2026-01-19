@@ -25,3 +25,37 @@ export type TrackingDTO = {
     face?: FaceLandmarksDTO;
     hand?: HandLandmarksDTO;
 };
+
+
+export type PerformanceMetricsDTO = {
+
+    fps: number;
+    avgFps: number;
+    minFps: number;
+    maxFps: number;
+
+
+    inferenceTimeMs: number;
+    avgInferenceTimeMs: number;
+    frameProcessingTimeMs: number;
+    avgFrameProcessingTimeMs: number;
+
+
+    memoryUsageMB?: number;
+    cpuUsagePercent?: number;
+    gpuUsagePercent?: number;
+
+
+    batteryLevel?: number;
+    batteryCharging?: boolean;
+
+
+    frameCount: number;
+    droppedFrames: number;
+    sessionDurationMs: number;
+    warmupComplete: boolean;
+
+
+    trackingConfidence?: number;
+    trackingLostCount: number;
+};

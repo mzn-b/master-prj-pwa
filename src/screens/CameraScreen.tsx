@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TrackingDTO, TrackingMode } from "../domain/tracking.dto";
-import { TrackingController } from "../tracking/TrackingController";
-import { OverlayCanvas } from "../ui/OverlayCanvas";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import type {PerformanceMetricsDTO, TrackingDTO, TrackingMode} from "../domain/tracking.dto";
+import {TrackingController} from "../tracking/TrackingController";
+import {PerformanceTracker} from "../tracking/PerformanceTracker";
+import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother, type SmoothingConfig} from "../tracking/LandmarkSmoother";
+import {
+    canStartTracking,
+    checkDeviceCapabilities,
+    DEFAULT_DYNAMIC_INFERENCE_CONFIG,
+    type DeviceCapabilities,
+    DynamicInferenceController,
+} from "../tracking/TrackingConfig";
+import {OverlayCanvas} from "../ui/OverlayCanvas";
+import {PerformanceOverlay} from "../ui/PerformanceOverlay";
 
 export function CameraScreen() {
     const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -12,62 +22,44 @@ export function CameraScreen() {
     const [isRunning, setIsRunning] = useState(false);
     const [tracking, setTracking] = useState<TrackingDTO | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [warnings, setWarnings] = useState<string[]>([]);
+    const [showPerformance, setShowPerformance] = useState(true);
+    const [showSettings, setShowSettings] = useState(false);
+    const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetricsDTO | null>(null);
+    const [deviceCapabilities, setDeviceCapabilities] = useState<DeviceCapabilities | null>(null);
+    const [isCheckingDevice, setIsCheckingDevice] = useState(true);
+
+    const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
+    const [smoothingConfig, setSmoothingConfig] = useState<SmoothingConfig>(DEFAULT_SMOOTHING_CONFIG);
+
+    const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
+    const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
 
     const [controller, setController] = useState<TrackingController | null>(null);
+    const performanceTrackerRef = useRef<PerformanceTracker | null>(null);
+    const smootherRef = useRef<LandmarkSmoother | null>(null);
+    const dynamicInferenceRef = useRef<DynamicInferenceController | null>(null);
+    const metricsIntervalRef = useRef<number | null>(null);
+    const frameCountRef = useRef(0);
 
-    const canStart = useMemo(() => !isRunning, [isRunning]);
-
-    const start = useCallback(async () => {
-        setError(null);
-
-        try {
-            if (!navigator.mediaDevices?.getUserMedia) {
-                if (window.location.protocol === "http:" && window.location.hostname !== "localhost") {
-                    throw new Error(
-                        "Kamerazugriff erfordert HTTPS. Bitte die Seite über HTTPS aufrufen."
-                    );
-                }
-                throw new Error(
-                    "Kamerazugriff wird von diesem Browser nicht unterstützt."
-                );
+    useEffect(() => {
+        (async () => {
+            setIsCheckingDevice(true);
+            const capabilities = await checkDeviceCapabilities();
+            setDeviceCapabilities(capabilities);
+            setWarnings(capabilities.warnings);
+            if (capabilities.errors.length > 0) {
+                setError(capabilities.errors.join(" "));
             }
+            setIsCheckingDevice(false);
+        })();
+    }, []);
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: "user" },
-                audio: false,
-            });
-            streamRef.current = stream;
-
-            const video = videoRef.current;
-            if (!video) throw new Error("Video element fehlt.");
-            video.srcObject = stream;
-            await video.play();
-
-            const c = await TrackingController.init(mode, { maxFaces: 1, maxHands: 2 });
-            setController(c);
-
-            setIsRunning(true);
-
-            const loop = () => {
-                const v = videoRef.current;
-                if (!v || v.readyState < 2) {
-                    rafRef.current = requestAnimationFrame(loop);
-                    return;
-                }
-                const ts = performance.now();
-                const dto = c.detect(v, ts, mode);
-                setTracking(dto);
-
-                rafRef.current = requestAnimationFrame(loop);
-            };
-
-            rafRef.current = requestAnimationFrame(loop);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Unbekannter Fehler beim Start.";
-            setError(msg);
-            await stop();
-        }
-    }, [mode]);
+    const canStart = useMemo(() => {
+        if (isRunning || isCheckingDevice) return false;
+        if (!deviceCapabilities) return false;
+        return canStartTracking(deviceCapabilities);
+    }, [isRunning, isCheckingDevice, deviceCapabilities]);
 
     const stop = useCallback(async () => {
         setIsRunning(false);
@@ -76,6 +68,20 @@ export function CameraScreen() {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
+
+        if (metricsIntervalRef.current != null) {
+            clearInterval(metricsIntervalRef.current);
+            metricsIntervalRef.current = null;
+        }
+
+        performanceTrackerRef.current?.stop();
+        performanceTrackerRef.current = null;
+
+        smootherRef.current?.reset();
+        smootherRef.current = null;
+
+        dynamicInferenceRef.current?.reset();
+        dynamicInferenceRef.current = null;
 
         controller?.close();
         setController(null);
@@ -93,22 +99,155 @@ export function CameraScreen() {
         }
 
         setTracking(null);
+        setPerformanceMetrics(null);
+        frameCountRef.current = 0;
     }, [controller]);
+
+
+    const start = useCallback(async () => {
+        setError(null);
+        frameCountRef.current = 0;
+
+        try {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                if (window.location.protocol === "http:" && window.location.hostname !== "localhost") {
+                    throw new Error("Kamerazugriff erfordert HTTPS. Bitte die Seite über HTTPS aufrufen.");
+                }
+                throw new Error("Kamerazugriff wird von diesem Browser nicht unterstützt.");
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {facingMode: "user"},
+                audio: false,
+            });
+            streamRef.current = stream;
+
+            const video = videoRef.current;
+            if (!video) throw new Error("Video element fehlt.");
+            video.srcObject = stream;
+            await video.play();
+
+            const c = await TrackingController.init(mode, {maxFaces: 1, maxHands: 2});
+            setController(c);
+
+            const perfTracker = new PerformanceTracker();
+            perfTracker.start();
+            performanceTrackerRef.current = perfTracker;
+
+            smootherRef.current = new LandmarkSmoother({
+                ...smoothingConfig,
+                enabled: smoothingEnabled,
+            });
+
+            dynamicInferenceRef.current = new DynamicInferenceController({
+                ...DEFAULT_DYNAMIC_INFERENCE_CONFIG,
+                enabled: dynamicInferenceEnabled,
+            });
+
+            setIsRunning(true);
+
+
+            metricsIntervalRef.current = window.setInterval(() => {
+                if (performanceTrackerRef.current) {
+                    const metrics = performanceTrackerRef.current.getMetrics();
+                    setPerformanceMetrics(metrics);
+
+
+                    if (dynamicInferenceRef.current && metrics.fps > 0) {
+                        dynamicInferenceRef.current.recordFps(metrics.fps);
+                        setCurrentFrameSkip(dynamicInferenceRef.current.getCurrentFrameSkip());
+                    }
+                }
+            }, 500);
+
+            const loop = () => {
+                const v = videoRef.current;
+                const pt = performanceTrackerRef.current;
+                const sm = smootherRef.current;
+                const di = dynamicInferenceRef.current;
+
+                if (!v || v.readyState < 2) {
+                    rafRef.current = requestAnimationFrame(loop);
+                    return;
+                }
+
+                frameCountRef.current++;
+
+
+                const frameSkip = di?.getCurrentFrameSkip() ?? 8;
+                if (frameCountRef.current % frameSkip !== 0) {
+                    rafRef.current = requestAnimationFrame(loop);
+                    return;
+                }
+
+                const frameStart = pt?.recordFrameStart() ?? 0;
+                const ts = performance.now();
+
+
+                const inferenceStart = performance.now();
+                let dto = c.detect(v, ts, mode);
+                pt?.recordInferenceTime(inferenceStart);
+
+
+                if (sm) {
+                    dto = sm.smooth(dto);
+                }
+
+
+                const hasTracking = (dto.face?.faces?.length ?? 0) > 0 || (dto.hand?.hands?.length ?? 0) > 0;
+                pt?.recordFrameEnd(frameStart, hasTracking);
+
+                setTracking(dto);
+
+                rafRef.current = requestAnimationFrame(loop);
+            };
+
+            rafRef.current = requestAnimationFrame(loop);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Unbekannter Fehler beim Start.";
+            setError(msg);
+            await stop();
+        }
+    }, [mode, smoothingConfig, smoothingEnabled, dynamicInferenceEnabled, stop]);
+
+
+    useEffect(() => {
+        if (smootherRef.current) {
+            smootherRef.current.setConfig({...smoothingConfig, enabled: smoothingEnabled});
+        }
+    }, [smoothingEnabled, smoothingConfig]);
+
+
+    useEffect(() => {
+        if (dynamicInferenceRef.current) {
+            dynamicInferenceRef.current.setConfig({enabled: dynamicInferenceEnabled});
+        }
+    }, [dynamicInferenceEnabled]);
 
     useEffect(() => {
         if (!isRunning) return;
         (async () => {
             await stop();
             await start();
-        })().catch(() => {});
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        })().catch(() => {
+        });
+
     }, [mode]);
 
     return (
-        <div style={{ padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
-            <h1 style={{ margin: 0, marginBottom: 12 }}>Tracking PWA (Face + Hand)</h1>
+        <div style={{padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"}}>
+            <h1 style={{margin: 0, marginBottom: 12}}>Tracking PWA (Face + Hand)</h1>
 
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+            {/* F10: Device capability warnings */}
+            {warnings.length > 0 && (
+                <div style={{marginBottom: 12, padding: 8, background: "#fef3c7", borderRadius: 8, color: "#92400e"}}>
+                    {warnings.map((w, i) => (
+                        <div key={i}>Hinweis: {w}</div>
+                    ))}
+                </div>
+            )}
+
+            <div style={{display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap"}}>
                 <label>
                     Modus:&nbsp;
                     <select
@@ -123,19 +262,103 @@ export function CameraScreen() {
                 </label>
 
                 <button onClick={start} disabled={!canStart}>
-                    Start
+                    {isCheckingDevice ? "Prüfe..." : "Start"}
                 </button>
                 <button onClick={stop} disabled={!isRunning}>
                     Stop
                 </button>
 
-                <span style={{ opacity: 0.8 }}>
-          Status: {isRunning ? "läuft" : "gestoppt"}
-        </span>
+                <button onClick={() => setShowPerformance((p) => !p)} style={{marginLeft: 8}}>
+                    {showPerformance ? "Hide Metrics" : "Show Metrics"}
+                </button>
+
+                <button onClick={() => setShowSettings((s) => !s)}>
+                    Settings
+                </button>
+
+                <span style={{opacity: 0.8}}>
+                    Status: {isRunning ? "läuft" : "gestoppt"}
+                    {isRunning && !performanceMetrics?.warmupComplete && " (Warmup...)"}
+                </span>
             </div>
 
+            {/* Settings Panel */}
+            {showSettings && (
+                <div style={{marginBottom: 12, padding: 12, background: "#1f2937", borderRadius: 8, color: "#e5e7eb"}}>
+                    <h3 style={{margin: "0 0 8px 0", fontSize: 14}}>Einstellungen (NF4: Identisch für PWA & Native)</h3>
+
+                    {/* F9: Smoothing settings */}
+                    <div style={{marginBottom: 8}}>
+                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
+                            <input
+                                type="checkbox"
+                                checked={smoothingEnabled}
+                                onChange={(e) => setSmoothingEnabled(e.target.checked)}
+                            />
+                            F9: Landmark-Glättung (reduziert Jitter)
+                        </label>
+                        {smoothingEnabled && (
+                            <div style={{marginLeft: 24, marginTop: 4, fontSize: 12}}>
+                                <label style={{display: "block", marginBottom: 4}}>
+                                    Min Cutoff (niedriger = mehr Glättung):
+                                    <input
+                                        type="range"
+                                        min="0.1"
+                                        max="3"
+                                        step="0.1"
+                                        value={smoothingConfig.minCutoff}
+                                        onChange={(e) =>
+                                            setSmoothingConfig((c) => ({...c, minCutoff: parseFloat(e.target.value)}))
+                                        }
+                                        style={{marginLeft: 8, width: 100}}
+                                    />
+                                    {smoothingConfig.minCutoff}
+                                </label>
+                                <label style={{display: "block"}}>
+                                    Beta (höher = weniger Lag bei Bewegung):
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="0.05"
+                                        step="0.001"
+                                        value={smoothingConfig.beta}
+                                        onChange={(e) =>
+                                            setSmoothingConfig((c) => ({...c, beta: parseFloat(e.target.value)}))
+                                        }
+                                        style={{marginLeft: 8, width: 100}}
+                                    />
+                                    {smoothingConfig.beta}
+                                </label>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* F15: Dynamic inference settings */}
+                    <div style={{marginBottom: 8}}>
+                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
+                            <input
+                                type="checkbox"
+                                checked={dynamicInferenceEnabled}
+                                onChange={(e) => setDynamicInferenceEnabled(e.target.checked)}
+                            />
+                            F15: Dynamische Inferenzrate (passt sich an Geräteleistung an)
+                        </label>
+                        {dynamicInferenceEnabled && (
+                            <div style={{marginLeft: 24, marginTop: 4, fontSize: 12, color: "#9ca3af"}}>
+                                Aktueller Frame-Skip: {currentFrameSkip} (verarbeitet jeden {currentFrameSkip}. Frame)
+                            </div>
+                        )}
+                    </div>
+
+                    {/* F11: Warmup indicator */}
+                    <div style={{fontSize: 12, color: "#9ca3af"}}>
+                        F11: Warmup-Phase: {performanceMetrics?.warmupComplete ? "Abgeschlossen" : "Läuft (30 Frames)"}
+                    </div>
+                </div>
+            )}
+
             {error && (
-                <div style={{ marginBottom: 12, color: "crimson" }}>
+                <div style={{marginBottom: 12, color: "crimson"}}>
                     Fehler: {error}
                 </div>
             )}
@@ -162,8 +385,10 @@ export function CameraScreen() {
                             gap: 8,
                         }}
                     >
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                            <path d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             strokeWidth="1.5">
+                            <path
+                                d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"/>
                         </svg>
                         <span>Drücke Start um die Kamera zu aktivieren</span>
                     </div>
@@ -182,18 +407,37 @@ export function CameraScreen() {
                 />
 
                 {isRunning && (
-                    <div style={{ position: "absolute", inset: 0, transform: "scaleX(-1)" }}>
-                        <OverlayCanvas tracking={tracking} videoEl={videoRef.current} />
+                    <div style={{position: "absolute", inset: 0, transform: "scaleX(-1)"}}>
+                        <OverlayCanvas tracking={tracking} videoEl={videoRef.current}/>
                     </div>
+                )}
+
+                {isRunning && (
+                    <PerformanceOverlay metrics={performanceMetrics} visible={showPerformance}/>
                 )}
             </div>
 
-            <details style={{ marginTop: 12 }}>
-                <summary>Letztes TrackingDTO</summary>
-                <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(tracking, null, 2)}</pre>
+            <details style={{marginTop: 12}}>
+                {performanceMetrics && (
+                    <button
+                        style={{marginTop: 8}}
+                        onClick={() => {
+                            const data = JSON.stringify(performanceMetrics, null, 2);
+                            const blob = new Blob([data], {type: "application/json"});
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `performance-metrics-${Date.now()}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        }}
+                    >
+                        Export Metrics
+                    </button>
+                )}
             </details>
 
-            <p style={{ marginTop: 12, opacity: 0.8 }}>
+            <p style={{marginTop: 12, opacity: 0.8}}>
                 Verarbeitung läuft on-device im Browser; es werden keine Bilddaten hochgeladen.
             </p>
         </div>

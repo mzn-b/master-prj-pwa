@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {PerformanceMetricsDTO, TrackingDTO, TrackingMode} from "../domain/tracking.dto";
 import {TrackingController} from "../tracking/TrackingController";
 import {PerformanceTracker} from "../tracking/PerformanceTracker";
-import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother, type SmoothingConfig} from "../tracking/LandmarkSmoother";
+import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother} from "../tracking/LandmarkSmoother";
 import {
     canStartTracking,
     checkDeviceCapabilities,
@@ -30,7 +30,6 @@ export function CameraScreen() {
     const [isCheckingDevice, setIsCheckingDevice] = useState(true);
 
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
-    const [smoothingConfig, setSmoothingConfig] = useState<SmoothingConfig>(DEFAULT_SMOOTHING_CONFIG);
 
     const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
     const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
@@ -135,7 +134,7 @@ export function CameraScreen() {
             performanceTrackerRef.current = perfTracker;
 
             smootherRef.current = new LandmarkSmoother({
-                ...smoothingConfig,
+                ...DEFAULT_SMOOTHING_CONFIG,
                 enabled: smoothingEnabled,
             });
 
@@ -208,14 +207,14 @@ export function CameraScreen() {
             setError(msg);
             await stop();
         }
-    }, [mode, smoothingConfig, smoothingEnabled, dynamicInferenceEnabled, stop]);
+    }, [mode, smoothingEnabled, dynamicInferenceEnabled, stop]);
 
 
     useEffect(() => {
         if (smootherRef.current) {
-            smootherRef.current.setConfig({...smoothingConfig, enabled: smoothingEnabled});
+            smootherRef.current.setConfig({...DEFAULT_SMOOTHING_CONFIG, enabled: smoothingEnabled});
         }
-    }, [smoothingEnabled, smoothingConfig]);
+    }, [smoothingEnabled]);
 
 
     useEffect(() => {
@@ -224,21 +223,22 @@ export function CameraScreen() {
         }
     }, [dynamicInferenceEnabled]);
 
+    const prevModeRef = useRef(mode);
     useEffect(() => {
         if (!isRunning) return;
+        if (prevModeRef.current === mode) return;
+        prevModeRef.current = mode;
         (async () => {
             await stop();
             await start();
         })().catch(() => {
         });
-
-    }, [mode]);
+    }, [isRunning, mode, start, stop]);
 
     return (
         <div style={{padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"}}>
             <h1 style={{margin: 0, marginBottom: 12}}>Tracking PWA (Face + Hand)</h1>
 
-            {/* F10: Device capability warnings */}
             {warnings.length > 0 && (
                 <div style={{marginBottom: 12, padding: 8, background: "#fef3c7", borderRadius: 8, color: "#92400e"}}>
                     {warnings.map((w, i) => (
@@ -282,12 +282,10 @@ export function CameraScreen() {
                 </span>
             </div>
 
-            {/* Settings Panel */}
             {showSettings && (
                 <div style={{marginBottom: 12, padding: 12, background: "#1f2937", borderRadius: 8, color: "#e5e7eb"}}>
                     <h3 style={{margin: "0 0 8px 0", fontSize: 14}}>Einstellungen (NF4: Identisch für PWA & Native)</h3>
 
-                    {/* F9: Smoothing settings */}
                     <div style={{marginBottom: 8}}>
                         <label style={{display: "flex", alignItems: "center", gap: 8}}>
                             <input
@@ -297,43 +295,8 @@ export function CameraScreen() {
                             />
                             F9: Landmark-Glättung (reduziert Jitter)
                         </label>
-                        {smoothingEnabled && (
-                            <div style={{marginLeft: 24, marginTop: 4, fontSize: 12}}>
-                                <label style={{display: "block", marginBottom: 4}}>
-                                    Min Cutoff (niedriger = mehr Glättung):
-                                    <input
-                                        type="range"
-                                        min="0.1"
-                                        max="3"
-                                        step="0.1"
-                                        value={smoothingConfig.minCutoff}
-                                        onChange={(e) =>
-                                            setSmoothingConfig((c) => ({...c, minCutoff: parseFloat(e.target.value)}))
-                                        }
-                                        style={{marginLeft: 8, width: 100}}
-                                    />
-                                    {smoothingConfig.minCutoff}
-                                </label>
-                                <label style={{display: "block"}}>
-                                    Beta (höher = weniger Lag bei Bewegung):
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="0.05"
-                                        step="0.001"
-                                        value={smoothingConfig.beta}
-                                        onChange={(e) =>
-                                            setSmoothingConfig((c) => ({...c, beta: parseFloat(e.target.value)}))
-                                        }
-                                        style={{marginLeft: 8, width: 100}}
-                                    />
-                                    {smoothingConfig.beta}
-                                </label>
-                            </div>
-                        )}
                     </div>
 
-                    {/* F15: Dynamic inference settings */}
                     <div style={{marginBottom: 8}}>
                         <label style={{display: "flex", alignItems: "center", gap: 8}}>
                             <input
@@ -350,7 +313,6 @@ export function CameraScreen() {
                         )}
                     </div>
 
-                    {/* F11: Warmup indicator */}
                     <div style={{fontSize: 12, color: "#9ca3af"}}>
                         F11: Warmup-Phase: {performanceMetrics?.warmupComplete ? "Abgeschlossen" : "Läuft (30 Frames)"}
                     </div>

@@ -1,8 +1,3 @@
-/**
- * Shared tracking configuration for PWA and Native apps (NF4)
- * Ensures both implementations use identical settings for fair comparison
- */
-
 export interface DeviceCapabilities {
     hasCamera: boolean;
     hasWebGL: boolean;
@@ -102,7 +97,6 @@ export function canStartTracking(capabilities: DeviceCapabilities): boolean {
         capabilities.isSecureContext;
 }
 
-
 export interface DynamicInferenceConfig {
     enabled: boolean;
     targetFps: number;
@@ -115,12 +109,12 @@ export interface DynamicInferenceConfig {
 
 export const DEFAULT_DYNAMIC_INFERENCE_CONFIG: DynamicInferenceConfig = {
     enabled: false,
-    targetFps: 20,
+    targetFps: 60,
     minFrameSkip: 1,
-    maxFrameSkip: 8,
+    maxFrameSkip: 15,
     adjustmentInterval: 30,
-    fpsLowThreshold: 15,
-    fpsHighThreshold: 25,
+    fpsLowThreshold: 20,
+    fpsHighThreshold: 40,
 };
 
 export class DynamicInferenceController {
@@ -165,10 +159,10 @@ export class DynamicInferenceController {
 
         if (avgFps < this.config.fpsLowThreshold && this.currentFrameSkip < this.config.maxFrameSkip) {
 
-            this.currentFrameSkip = Math.min(this.currentFrameSkip * 2, this.config.maxFrameSkip);
+            this.currentFrameSkip = Math.min(this.currentFrameSkip + 1, this.config.maxFrameSkip);
         } else if (avgFps > this.config.fpsHighThreshold && this.currentFrameSkip > this.config.minFrameSkip) {
 
-            this.currentFrameSkip = Math.max(Math.floor(this.currentFrameSkip / 2), this.config.minFrameSkip);
+            this.currentFrameSkip = Math.max(Math.floor(this.currentFrameSkip - 1), this.config.minFrameSkip);
         }
     }
 

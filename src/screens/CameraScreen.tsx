@@ -12,6 +12,7 @@ import {
 } from "../tracking/TrackingConfig";
 import {OverlayCanvas} from "../ui/OverlayCanvas";
 import {PerformanceOverlay} from "../ui/PerformanceOverlay";
+import {submitTrackingSession} from "../api/trackingApi";
 
 export function CameraScreen() {
     const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -34,7 +35,11 @@ export function CameraScreen() {
     const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
     const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
 
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadStatus, setUploadStatus] = useState<"success" | "error" | null>(null);
+
     const [controller, setController] = useState<TrackingController | null>(null);
+    const sessionModeRef = useRef<TrackingMode>(mode);
     const performanceTrackerRef = useRef<PerformanceTracker | null>(null);
     const smootherRef = useRef<LandmarkSmoother | null>(null);
     const dynamicInferenceRef = useRef<DynamicInferenceController | null>(null);
@@ -61,6 +66,10 @@ export function CameraScreen() {
     }, [isRunning, isCheckingDevice, deviceCapabilities]);
 
     const stop = useCallback(async () => {
+        // Capture final metrics before cleanup
+        const finalMetrics = performanceTrackerRef.current?.getMetrics();
+        const sessionMode = sessionModeRef.current;
+
         setIsRunning(false);
 
         if (rafRef.current != null) {
@@ -100,12 +109,30 @@ export function CameraScreen() {
         setTracking(null);
         setPerformanceMetrics(null);
         frameCountRef.current = 0;
+
+        // Submit metrics to backend
+        if (finalMetrics && finalMetrics.frameCount > 0) {
+            setIsUploading(true);
+            setUploadStatus(null);
+            try {
+                const response = await submitTrackingSession(sessionMode, finalMetrics);
+                setUploadStatus(response ? "success" : "error");
+            } catch {
+                setUploadStatus("error");
+            } finally {
+                setIsUploading(false);
+                // Clear status after 3 seconds
+                setTimeout(() => setUploadStatus(null), 3000);
+            }
+        }
     }, [controller]);
 
 
     const start = useCallback(async () => {
         setError(null);
+        setUploadStatus(null);
         frameCountRef.current = 0;
+        sessionModeRef.current = mode;
 
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
@@ -279,6 +306,9 @@ export function CameraScreen() {
                 <span style={{opacity: 0.8}}>
                     Status: {isRunning ? "läuft" : "gestoppt"}
                     {isRunning && !performanceMetrics?.warmupComplete && " (Warmup...)"}
+                    {isUploading && " | Sende Daten..."}
+                    {uploadStatus === "success" && " | Daten gesendet"}
+                    {uploadStatus === "error" && " | Fehler beim Senden"}
                 </span>
             </div>
 

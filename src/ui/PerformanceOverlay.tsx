@@ -45,7 +45,7 @@ export function PerformanceOverlay({ metrics, visible }: Props) {
                 <div style={styles.row}>
                     <span>Min/Max:</span>
                     <span style={styles.value}>
-                        {metrics.minFps} / {metrics.maxFps}
+                        {metrics.minFps ?? "-"} / {metrics.maxFps ?? "-"}
                     </span>
                 </div>
             </div>

@@ -89,8 +89,13 @@ export class PerformanceTracker {
 
             if (this.warmupComplete) {
                 const currentFps = 1000 / frameTime;
-                if (currentFps < this.minFps) this.minFps = currentFps;
-                if (currentFps > this.maxFps) this.maxFps = currentFps;
+                if (this.minFps === Infinity) {
+                    this.minFps = currentFps;
+                    this.maxFps = currentFps;
+                } else {
+                    if (currentFps < this.minFps) this.minFps = currentFps;
+                    if (currentFps > this.maxFps) this.maxFps = currentFps;
+                }
             }
         }
 
@@ -103,9 +108,8 @@ export class PerformanceTracker {
 
         if (!this.warmupComplete && this.frameCount >= WARMUP_FRAMES) {
             this.warmupComplete = true;
-
             this.minFps = Infinity;
-            this.maxFps = 0;
+            this.maxFps = Infinity;
         }
     }
     getMetrics(): PerformanceMetricsDTO {
@@ -155,8 +159,8 @@ export class PerformanceTracker {
         return {
             fps: Math.round(fps * 10) / 10,
             avgFps: Math.round(avgFps * 10) / 10,
-            minFps: this.minFps === Infinity ? 0 : Math.round(this.minFps * 10) / 10,
-            maxFps: Math.round(this.maxFps * 10) / 10,
+            minFps: this.minFps === Infinity ? null : Math.round(this.minFps * 10) / 10,
+            maxFps: this.maxFps === Infinity ? null : Math.round(this.maxFps * 10) / 10,
             inferenceTimeMs: Math.round(currentInferenceTime * 100) / 100,
             avgInferenceTimeMs: Math.round(avgInferenceTime * 100) / 100,
             frameProcessingTimeMs: Math.round(currentFrameProcessingTime * 100) / 100,

@@ -31,8 +31,8 @@ export type PerformanceMetricsDTO = {
 
     fps: number;
     avgFps: number;
-    minFps: number;
-    maxFps: number;
+    minFps: number | null;
+    maxFps: number | null;
 
 
     inferenceTimeMs: number;

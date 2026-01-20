@@ -408,30 +408,6 @@ export function CameraScreen() {
                     <PerformanceOverlay metrics={performanceMetrics} visible={showPerformance}/>
                 )}
             </div>
-
-            <details style={{marginTop: 12}}>
-                {performanceMetrics && (
-                    <button
-                        style={{marginTop: 8}}
-                        onClick={() => {
-                            const data = JSON.stringify(performanceMetrics, null, 2);
-                            const blob = new Blob([data], {type: "application/json"});
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                            a.download = `performance-metrics-${Date.now()}.json`;
-                            a.click();
-                            URL.revokeObjectURL(url);
-                        }}
-                    >
-                        Export Metrics
-                    </button>
-                )}
-            </details>
-
-            <p style={{marginTop: 12, opacity: 0.8}}>
-                Verarbeitung läuft on-device im Browser; es werden keine Bilddaten hochgeladen.
-            </p>
         </div>
     );
 }

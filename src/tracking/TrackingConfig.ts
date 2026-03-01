@@ -103,25 +103,26 @@ export interface DynamicInferenceConfig {
     minFrameSkip: number;
     maxFrameSkip: number;
     adjustmentInterval: number;
-    fpsLowThreshold: number;
-    fpsHighThreshold: number;
+    // Inference time based thresholds (in milliseconds)
+    targetInferenceTimeMs: number;
+    inferenceTimeTolerance: number;
 }
 
 export const DEFAULT_DYNAMIC_INFERENCE_CONFIG: DynamicInferenceConfig = {
-    enabled: false,
-    targetFps: 60,
+    enabled: true,
+    targetFps: 30,
     minFrameSkip: 1,
-    maxFrameSkip: 15,
-    adjustmentInterval: 30,
-    fpsLowThreshold: 20,
-    fpsHighThreshold: 40,
+    maxFrameSkip: 10,
+    adjustmentInterval: 20,
+    targetInferenceTimeMs: 33, // 1000ms / 30fps
+    inferenceTimeTolerance: 5,
 };
 
 export class DynamicInferenceController {
     private config: DynamicInferenceConfig;
     private currentFrameSkip: number;
     private framesSinceAdjustment: number = 0;
-    private recentFps: number[] = [];
+    private recentInferenceTimes: number[] = [];
 
     constructor(config: DynamicInferenceConfig = DEFAULT_DYNAMIC_INFERENCE_CONFIG) {
         this.config = {...config};
@@ -136,12 +137,16 @@ export class DynamicInferenceController {
         return this.config.enabled ? this.currentFrameSkip : 1;
     }
 
-    recordFps(fps: number): void {
+    /**
+     * Record inference time and adjust frame skip accordingly.
+     * This is the preferred method - use this instead of recordFps().
+     */
+    recordInferenceTime(inferenceTimeMs: number): void {
         if (!this.config.enabled) return;
 
-        this.recentFps.push(fps);
-        if (this.recentFps.length > 10) {
-            this.recentFps.shift();
+        this.recentInferenceTimes.push(inferenceTimeMs);
+        if (this.recentInferenceTimes.length > 10) {
+            this.recentInferenceTimes.shift();
         }
 
         this.framesSinceAdjustment++;
@@ -153,23 +158,25 @@ export class DynamicInferenceController {
     }
 
     private adjustFrameSkip(): void {
-        if (this.recentFps.length < 3) return;
+        if (this.recentInferenceTimes.length < 3) return;
 
-        const avgFps = this.recentFps.reduce((a, b) => a + b, 0) / this.recentFps.length;
+        const avgInferenceTime = this.recentInferenceTimes.reduce((a, b) => a + b, 0) / this.recentInferenceTimes.length;
+        const target = this.config.targetInferenceTimeMs;
+        const tolerance = this.config.inferenceTimeTolerance;
 
-        if (avgFps < this.config.fpsLowThreshold && this.currentFrameSkip < this.config.maxFrameSkip) {
-
+        if (avgInferenceTime > target + tolerance && this.currentFrameSkip < this.config.maxFrameSkip) {
+            // Inference too slow - skip more frames to reduce load
             this.currentFrameSkip = Math.min(this.currentFrameSkip + 1, this.config.maxFrameSkip);
-        } else if (avgFps > this.config.fpsHighThreshold && this.currentFrameSkip > this.config.minFrameSkip) {
-
-            this.currentFrameSkip = Math.max(Math.floor(this.currentFrameSkip - 1), this.config.minFrameSkip);
+        } else if (avgInferenceTime < target - tolerance && this.currentFrameSkip > this.config.minFrameSkip) {
+            // Inference fast enough - can process more frames
+            this.currentFrameSkip = Math.max(this.currentFrameSkip - 1, this.config.minFrameSkip);
         }
     }
 
     reset(): void {
         this.currentFrameSkip = 1;
         this.framesSinceAdjustment = 0;
-        this.recentFps = [];
+        this.recentInferenceTimes = [];
     }
 }
 

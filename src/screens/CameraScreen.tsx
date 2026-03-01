@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import type {PerformanceMetricsDTO, TrackingDTO, TrackingMode} from "../domain/tracking.dto";
+import type {PerformanceMetricsDTO, TrackingMode} from "../domain/tracking.dto";
 import {TrackingController} from "../tracking/TrackingController";
 import {PerformanceTracker} from "../tracking/PerformanceTracker";
 import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother} from "../tracking/LandmarkSmoother";
@@ -10,18 +10,16 @@ import {
     type DeviceCapabilities,
     DynamicInferenceController,
 } from "../tracking/TrackingConfig";
-import {OverlayCanvas} from "../ui/OverlayCanvas";
 import {PerformanceOverlay} from "../ui/PerformanceOverlay";
 import {submitTrackingSession} from "../api/trackingApi";
+import {useRenderer} from "../rendering";
+import {useCamera} from "../hooks";
 
 export function CameraScreen() {
-    const videoRef = useRef<HTMLVideoElement | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
     const rafRef = useRef<number | null>(null);
 
     const [mode, setMode] = useState<TrackingMode>("combined");
-    const [isRunning, setIsRunning] = useState(false);
-    const [tracking, setTracking] = useState<TrackingDTO | null>(null);
+    const [isTrackingActive, setIsTrackingActive] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [warnings, setWarnings] = useState<string[]>([]);
     const [showPerformance, setShowPerformance] = useState(true);
@@ -31,12 +29,14 @@ export function CameraScreen() {
     const [isCheckingDevice, setIsCheckingDevice] = useState(true);
 
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
-
     const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
     const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState<"success" | "error" | null>(null);
+
+    // Use camera hook for stream management
+    const camera = useCamera();
 
     const [controller, setController] = useState<TrackingController | null>(null);
     const sessionModeRef = useRef<TrackingMode>(mode);
@@ -45,6 +45,18 @@ export function CameraScreen() {
     const dynamicInferenceRef = useRef<DynamicInferenceController | null>(null);
     const metricsIntervalRef = useRef<number | null>(null);
     const frameCountRef = useRef(0);
+
+    // Initialize renderer with auto backend (WebGPU preferred, WebGL fallback)
+    const { canvasRef, render: renderOverlay, capabilities } = useRenderer({
+        preferredBackend: "auto",
+        autoAddLandmarkOverlay: true,
+    });
+
+    useEffect(() => {
+        if (capabilities) {
+            console.log(`[CameraScreen] Renderer backend: ${capabilities.backend}`);
+        }
+    }, [capabilities]);
 
     useEffect(() => {
         (async () => {
@@ -59,6 +71,13 @@ export function CameraScreen() {
         })();
     }, []);
 
+    // Combine camera error with local error
+    useEffect(() => {
+        if (camera.error) setError(camera.error);
+    }, [camera.error]);
+
+    const isRunning = camera.isActive && isTrackingActive;
+
     const canStart = useMemo(() => {
         if (isRunning || isCheckingDevice) return false;
         if (!deviceCapabilities) return false;
@@ -70,7 +89,7 @@ export function CameraScreen() {
         const finalMetrics = performanceTrackerRef.current?.getMetrics();
         const sessionMode = sessionModeRef.current;
 
-        setIsRunning(false);
+        setIsTrackingActive(false);
 
         if (rafRef.current != null) {
             cancelAnimationFrame(rafRef.current);
@@ -82,31 +101,18 @@ export function CameraScreen() {
             metricsIntervalRef.current = null;
         }
 
-        performanceTrackerRef.current?.stop();
         performanceTrackerRef.current = null;
-
         smootherRef.current?.reset();
         smootherRef.current = null;
-
         dynamicInferenceRef.current?.reset();
         dynamicInferenceRef.current = null;
 
         controller?.close();
         setController(null);
 
-        const stream = streamRef.current;
-        if (stream) {
-            for (const track of stream.getTracks()) track.stop();
-            streamRef.current = null;
-        }
+        // Stop camera using hook
+        camera.stop();
 
-        const video = videoRef.current;
-        if (video) {
-            video.pause();
-            video.srcObject = null;
-        }
-
-        setTracking(null);
         setPerformanceMetrics(null);
         frameCountRef.current = 0;
 
@@ -121,11 +127,10 @@ export function CameraScreen() {
                 setUploadStatus("error");
             } finally {
                 setIsUploading(false);
-                // Clear status after 3 seconds
                 setTimeout(() => setUploadStatus(null), 3000);
             }
         }
-    }, [controller]);
+    }, [controller, camera]);
 
 
     const start = useCallback(async () => {
@@ -135,23 +140,12 @@ export function CameraScreen() {
         sessionModeRef.current = mode;
 
         try {
-            if (!navigator.mediaDevices?.getUserMedia) {
-                if (window.location.protocol === "http:" && window.location.hostname !== "localhost") {
-                    throw new Error("Kamerazugriff erfordert HTTPS. Bitte die Seite über HTTPS aufrufen.");
-                }
-                throw new Error("Kamerazugriff wird von diesem Browser nicht unterstützt.");
-            }
+            // Start camera using hook
+            const cameraStarted = await camera.start();
+            if (!cameraStarted) return;
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: {facingMode: "user"},
-                audio: false,
-            });
-            streamRef.current = stream;
-
-            const video = videoRef.current;
+            const video = camera.videoRef.current;
             if (!video) throw new Error("Video element fehlt.");
-            video.srcObject = stream;
-            await video.play();
 
             const c = await TrackingController.init(mode, {maxFaces: 1, maxHands: 2});
             setController(c);
@@ -170,24 +164,27 @@ export function CameraScreen() {
                 enabled: dynamicInferenceEnabled,
             });
 
-            setIsRunning(true);
-
+            setIsTrackingActive(true);
 
             metricsIntervalRef.current = window.setInterval(() => {
                 if (performanceTrackerRef.current) {
                     const metrics = performanceTrackerRef.current.getMetrics();
                     setPerformanceMetrics(metrics);
 
-
-                    if (dynamicInferenceRef.current && metrics.fps > 0) {
-                        dynamicInferenceRef.current.recordFps(metrics.fps);
+                    if (dynamicInferenceRef.current && metrics.avgInferenceTimeMs > 0) {
+                        dynamicInferenceRef.current.recordInferenceTime(metrics.avgInferenceTimeMs);
                         setCurrentFrameSkip(dynamicInferenceRef.current.getCurrentFrameSkip());
                     }
                 }
             }, 500);
 
+            // Cache video dimensions to avoid layout thrashing
+            let cachedWidth = video.clientWidth;
+            let cachedHeight = video.clientHeight;
+            let dimensionCheckCounter = 0;
+
             const loop = () => {
-                const v = videoRef.current;
+                const v = camera.videoRef.current;
                 const pt = performanceTrackerRef.current;
                 const sm = smootherRef.current;
                 const di = dynamicInferenceRef.current;
@@ -199,32 +196,36 @@ export function CameraScreen() {
 
                 frameCountRef.current++;
 
-
-                const frameSkip = di?.getCurrentFrameSkip() ?? 8;
+                const frameSkip = di?.getCurrentFrameSkip() ?? 1;
                 if (frameCountRef.current % frameSkip !== 0) {
                     rafRef.current = requestAnimationFrame(loop);
                     return;
                 }
 
+                // Update cached dimensions every 60 frames
+                dimensionCheckCounter++;
+                if (dimensionCheckCounter >= 60) {
+                    dimensionCheckCounter = 0;
+                    cachedWidth = v.clientWidth;
+                    cachedHeight = v.clientHeight;
+                }
+
                 const frameStart = pt?.recordFrameStart() ?? 0;
                 const ts = performance.now();
-
 
                 const inferenceStart = performance.now();
                 let dto = c.detect(v, ts, mode);
                 pt?.recordInferenceTime(inferenceStart);
 
+                if (sm) dto = sm.smooth(dto);
 
-                if (sm) {
-                    dto = sm.smooth(dto);
-                }
-
-
-                const hasTracking = (dto.face?.faces?.length ?? 0) > 0 || (dto.hand?.hands?.length ?? 0) > 0;
+                const facesCount = dto.face?.faces?.length ?? 0;
+                const handsCount = dto.hand?.hands?.length ?? 0;
+                const hasTracking = facesCount > 0 || handsCount > 0;
+                pt?.recordDetection(facesCount, handsCount);
                 pt?.recordFrameEnd(frameStart, hasTracking);
 
-                setTracking(dto);
-
+                renderOverlay(dto, cachedWidth, cachedHeight);
                 rafRef.current = requestAnimationFrame(loop);
             };
 
@@ -234,7 +235,7 @@ export function CameraScreen() {
             setError(msg);
             await stop();
         }
-    }, [mode, smoothingEnabled, dynamicInferenceEnabled, stop]);
+    }, [mode, smoothingEnabled, dynamicInferenceEnabled, stop, renderOverlay, camera]);
 
 
     useEffect(() => {
@@ -386,7 +387,7 @@ export function CameraScreen() {
                     </div>
                 )}
                 <video
-                    ref={videoRef}
+                    ref={camera.videoRef}
                     playsInline
                     muted
                     style={{
@@ -398,11 +399,23 @@ export function CameraScreen() {
                     }}
                 />
 
-                {isRunning && (
-                    <div style={{position: "absolute", inset: 0, transform: "scaleX(-1)"}}>
-                        <OverlayCanvas tracking={tracking} videoEl={videoRef.current}/>
-                    </div>
-                )}
+                <div style={{
+                    position: "absolute",
+                    inset: 0,
+                    transform: "scaleX(-1)",
+                    display: isRunning ? "block" : "none",
+                }}>
+                    <canvas
+                        ref={canvasRef}
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            pointerEvents: "none",
+                        }}
+                    />
+                </div>
 
                 {isRunning && (
                     <PerformanceOverlay metrics={performanceMetrics} visible={showPerformance}/>

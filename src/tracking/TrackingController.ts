@@ -10,11 +10,14 @@ import type { TrackingDTO, TrackingMode, NormalizedPoint } from "../domain/track
 type InitOpts = {
     maxFaces?: number;
     maxHands?: number;
+    /** Use GPU acceleration for inference. Default: true */
+    useGPU?: boolean;
 };
 
 export class TrackingController {
     private face?: FaceLandmarker;
     private hand?: HandLandmarker;
+    private lastTimestamp = -1;
 
     private constructor(face?: FaceLandmarker, hand?: HandLandmarker) {
         this.face = face;
@@ -22,33 +25,44 @@ export class TrackingController {
     }
 
     static async init(mode: TrackingMode, opts: InitOpts = {}): Promise<TrackingController> {
+        const useGPU = opts.useGPU ?? true;
         const fileset = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
 
         const shouldFace = mode === "face" || mode === "combined";
         const shouldHand = mode === "hand" || mode === "combined";
 
+        const baseOptions = {
+            delegate: useGPU ? "GPU" as const : "CPU" as const,
+        };
+
         const [face, hand] = await Promise.all([
             shouldFace
                 ? FaceLandmarker.createFromOptions(fileset, {
                     baseOptions: {
+                        ...baseOptions,
                         modelAssetPath: "/mediapipe/models/face_landmarker.task",
                     },
                     runningMode: "VIDEO",
                     numFaces: opts.maxFaces ?? 1,
+                    // Disable blendshapes and face geometry for better performance
+                    outputFaceBlendshapes: false,
+                    outputFacialTransformationMatrixes: false,
                 })
                 : Promise.resolve(undefined),
 
             shouldHand
                 ? HandLandmarker.createFromOptions(fileset, {
                     baseOptions: {
+                        ...baseOptions,
                         modelAssetPath: "/mediapipe/models/hand_landmarker.task",
                     },
                     runningMode: "VIDEO",
-                    numHands: opts.maxHands ?? 1,
+                    numHands: opts.maxHands ?? 2,
                 })
                 : Promise.resolve(undefined),
         ]);
 
+        console.log(`[TrackingController] Initialized with ${useGPU ? "GPU" : "CPU"} delegate`);
         return new TrackingController(face, hand);
     }
 
@@ -57,10 +71,18 @@ export class TrackingController {
         this.hand?.close();
         this.face = undefined;
         this.hand = undefined;
+        this.lastTimestamp = -1;
     }
 
     detect(video: HTMLVideoElement, timestampMs: number, mode: TrackingMode): TrackingDTO {
         const dto: TrackingDTO = { timestampMs, mode };
+
+        // MediaPipe requires strictly increasing timestamps
+        // Skip if timestamp hasn't increased (can happen with high frame rates)
+        if (timestampMs <= this.lastTimestamp) {
+            return dto;
+        }
+        this.lastTimestamp = timestampMs;
 
         if ((mode === "face" || mode === "combined") && this.face) {
             const res: FaceLandmarkerResult = this.face.detectForVideo(video, timestampMs);

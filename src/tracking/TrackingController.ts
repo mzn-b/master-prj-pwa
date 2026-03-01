@@ -14,6 +14,11 @@ type InitOpts = {
     useGPU?: boolean;
 };
 
+export type InitResult = {
+    controller: TrackingController;
+    modelLoadTimeMs: number;
+};
+
 export class TrackingController {
     private face?: FaceLandmarker;
     private hand?: HandLandmarker;
@@ -24,7 +29,8 @@ export class TrackingController {
         this.hand = hand;
     }
 
-    static async init(mode: TrackingMode, opts: InitOpts = {}): Promise<TrackingController> {
+    static async init(mode: TrackingMode, opts: InitOpts = {}): Promise<InitResult> {
+        const startTime = performance.now();
         const useGPU = opts.useGPU ?? true;
         const fileset = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
 
@@ -62,8 +68,12 @@ export class TrackingController {
                 : Promise.resolve(undefined),
         ]);
 
-        console.log(`[TrackingController] Initialized with ${useGPU ? "GPU" : "CPU"} delegate`);
-        return new TrackingController(face, hand);
+        const modelLoadTimeMs = Math.round(performance.now() - startTime);
+        console.log(`[TrackingController] Initialized with ${useGPU ? "GPU" : "CPU"} delegate in ${modelLoadTimeMs}ms`);
+        return {
+            controller: new TrackingController(face, hand),
+            modelLoadTimeMs,
+        };
     }
 
     close(): void {

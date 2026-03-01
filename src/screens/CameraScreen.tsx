@@ -147,10 +147,11 @@ export function CameraScreen() {
             const video = camera.videoRef.current;
             if (!video) throw new Error("Video element fehlt.");
 
-            const c = await TrackingController.init(mode, {maxFaces: 1, maxHands: 2});
+            const { controller: c, modelLoadTimeMs } = await TrackingController.init(mode, {maxFaces: 1, maxHands: 2});
             setController(c);
 
             const perfTracker = new PerformanceTracker();
+            perfTracker.setModelLoadTime(modelLoadTimeMs);
             perfTracker.start();
             performanceTrackerRef.current = perfTracker;
 

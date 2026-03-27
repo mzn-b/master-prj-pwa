@@ -145,6 +145,37 @@ export class PerformanceTracker {
         this.consecutiveTrackingLossMax = 0;
     }
 
+    /**
+     * Resets all counters and buffers while keeping hardware info cached.
+     * Used when submitting a mid-session checkpoint (e.g. on filter toggle)
+     * so that the next session starts fresh.
+     */
+    reset(): void {
+        this.startTime = performance.now();
+        this.lastFrameTime = this.startTime;
+        this.frameCount = 0;
+        this.droppedFrames = 0;
+        this.trackingLostCount = 0;
+        this.warmupComplete = false;
+        this.lastTrackingValid = false;
+        this.minFps = Infinity;
+        this.maxFps = 0;
+        this.frameTimes.reset();
+        this.inferenceTimes.reset();
+        this.processingTimes.reset();
+        this.totalFacesDetected = 0;
+        this.totalHandsDetected = 0;
+        this.detectionFrameCount = 0;
+        this.peakMemoryUsageMB = 0;
+        this.errorCount = 0;
+        this.trackingLostTime = 0;
+        this.totalRecoveryTimeMs = 0;
+        this.recoveryCount = 0;
+        this.currentConsecutiveLoss = 0;
+        this.consecutiveTrackingLossMax = 0;
+        this.modelLoadTimeMs = undefined;
+    }
+
     setModelLoadTime(timeMs: number): void {
         this.modelLoadTimeMs = timeMs;
     }

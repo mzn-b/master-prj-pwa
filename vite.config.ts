@@ -32,6 +32,9 @@ export default defineConfig({
                 // ✅ unsere MediaPipe Assets aus public/
                 "mediapipe/models/*.task",
                 "mediapipe/wasm/*",
+
+                // ✅ AR Filter Assets
+                "filters/*",
             ],
 
             workbox: {
@@ -39,7 +42,7 @@ export default defineConfig({
                 // .task Dateien können größer sein -> Limit erhöhen
                 maximumFileSizeToCacheInBytes: 20 * 1024 * 1024, // 20MB
 
-                globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,task,wasm}"],
+                globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,task,wasm,glb}"],
 
                 // Sicherheit: falls irgendwas nicht im precache landet, runtime cache fallback
                 runtimeCaching: [

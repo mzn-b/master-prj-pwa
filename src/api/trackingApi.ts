@@ -20,6 +20,7 @@ export interface TrackingSessionRequest {
     mode: TrackingMode;
     metrics: PerformanceMetricsDTO;
     recordedAt?: string;
+    activeFilters?: string[];
 }
 
 export interface TrackingSessionResponse {
@@ -86,7 +87,8 @@ function generateSessionId(): string {
 
 export async function submitTrackingSession(
     mode: TrackingMode,
-    metrics: PerformanceMetricsDTO
+    metrics: PerformanceMetricsDTO,
+    activeFilters: string[] = []
 ): Promise<TrackingSessionResponse | null> {
     const request: TrackingSessionRequest = {
         platform: getPlatform(),
@@ -95,6 +97,7 @@ export async function submitTrackingSession(
         mode: mode.toUpperCase() as TrackingMode,
         metrics,
         recordedAt: new Date().toISOString(),
+        activeFilters,
     };
 
     try {

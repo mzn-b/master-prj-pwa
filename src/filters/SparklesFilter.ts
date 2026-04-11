@@ -2,8 +2,8 @@ import type { TrackingDTO } from '../domain/tracking.dto'
 
 const FINGERTIP_INDICES = [4, 8, 12, 16, 20]
 const GRAVITY = 120 // px/s²
-const MAX_PARTICLES = 200
-const SPAWN_CHANCE = 0.4 // per fingertip per frame
+const MAX_PARTICLES = 150
+const SPAWN_CHANCE = 0.35 // per fingertip per frame
 
 interface Particle {
   x: number

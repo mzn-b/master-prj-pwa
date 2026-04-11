@@ -179,11 +179,12 @@ export function CameraScreen() {
             const video = camera.videoRef.current;
             if (!video) throw new Error("Video element fehlt.");
 
-            const { controller: c, modelLoadTimeMs } = await TrackingController.init(effectiveMode, {maxFaces: 1, maxHands: 2});
+            const { controller: c, modelLoadTimeMs, gpuDelegateUsed } = await TrackingController.init(effectiveMode, {maxFaces: 1, maxHands: 2});
             setController(c);
 
             const perfTracker = new PerformanceTracker();
             perfTracker.setModelLoadTime(modelLoadTimeMs);
+            perfTracker.setGpuDelegateActive(gpuDelegateUsed);
             perfTracker.start();
             performanceTrackerRef.current = perfTracker;
 
@@ -343,18 +344,27 @@ export function CameraScreen() {
 
             <div style={{display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap"}}>
                 {appMode === 'landmarks' && (
-                    <label>
-                        Modus:&nbsp;
-                        <select
-                            value={mode}
-                            onChange={(e) => setMode(e.target.value as TrackingMode)}
-                            disabled={isRunning}
-                        >
-                            <option value="face">Face</option>
-                            <option value="hand">Hand</option>
-                            <option value="combined">Combined</option>
-                        </select>
-                    </label>
+                    <div style={{display: "flex", gap: 4}}>
+                        {(["face", "hand", "combined"] as TrackingMode[]).map(m => (
+                            <button
+                                key={m}
+                                disabled={isRunning}
+                                onClick={() => setMode(m)}
+                                style={{
+                                    padding: "6px 16px",
+                                    borderRadius: 6,
+                                    border: "none",
+                                    cursor: isRunning ? "default" : "pointer",
+                                    background: mode === m ? "#4f46e5" : "#374151",
+                                    color: "#fff",
+                                    fontWeight: mode === m ? "bold" : "normal",
+                                    textTransform: "capitalize",
+                                }}
+                            >
+                                {m}
+                            </button>
+                        ))}
+                    </div>
                 )}
 
                 {appMode === 'filters' && (

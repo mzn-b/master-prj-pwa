@@ -17,6 +17,8 @@ type InitOpts = {
 export type InitResult = {
     controller: TrackingController;
     modelLoadTimeMs: number;
+    /** Whether the GPU delegate was requested and likely active */
+    gpuDelegateUsed: boolean;
 };
 
 export class TrackingController {
@@ -73,6 +75,7 @@ export class TrackingController {
         return {
             controller: new TrackingController(face, hand),
             modelLoadTimeMs,
+            gpuDelegateUsed: useGPU,
         };
     }
 

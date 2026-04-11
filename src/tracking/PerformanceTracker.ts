@@ -79,18 +79,25 @@ export class PerformanceTracker {
     private currentConsecutiveLoss = 0;
     private consecutiveTrackingLossMax = 0;
 
-    // Model load time (set externally)
+    // Model load time and GPU delegate status (set externally)
     private modelLoadTimeMs: number | undefined;
+    private gpuDelegateActive: boolean | undefined;
 
-    // Cached hardware info
+    // Cached hardware info (queried once at construction)
     private batteryManager: BatteryManager | null = null;
     private cpuCores: number | undefined;
     private gpuVendor: string | undefined;
     private gpuRenderer: string | undefined;
+    private totalDeviceMemoryMB: number | undefined;
+
+    // Compute Pressure API (thermalState equivalent, Chrome 125+)
+    private computePressureState: string | undefined;
+    private pressureObserver: unknown = null;
 
     constructor() {
         this.initBattery();
         this.initHardwareInfo();
+        this.initComputePressure();
     }
 
     private async initBattery(): Promise<void> {
@@ -104,6 +111,13 @@ export class PerformanceTracker {
     private initHardwareInfo(): void {
         this.cpuCores = navigator.hardwareConcurrency;
 
+        // Physical device RAM via Device Memory API (returns GB, rounded to nearest power of 2)
+        const deviceMemoryGB = (navigator as NavigatorWithDeviceMemory).deviceMemory;
+        if (deviceMemoryGB !== undefined) {
+            this.totalDeviceMemoryMB = deviceMemoryGB * 1024;
+        }
+
+        // GPU info via WebGL debug extension
         try {
             const canvas = document.createElement("canvas");
             const gl = canvas.getContext("webgl");
@@ -119,6 +133,23 @@ export class PerformanceTracker {
         } catch { /* WebGL not available */ }
     }
 
+    private initComputePressure(): void {
+        // Compute Pressure API — maps CPU pressure to thermalState-equivalent values.
+        // Available in Chrome 125+ (behind origin trial in earlier versions).
+        // States: 'nominal' | 'fair' | 'serious' | 'critical' — matches iOS thermal state naming.
+        try {
+            const PressureObserverCtor = (window as WindowWithPressure).PressureObserver;
+            if (typeof PressureObserverCtor === "function") {
+                const observer = new PressureObserverCtor((records: PressureRecord[]) => {
+                    const latest = records[records.length - 1];
+                    if (latest) this.computePressureState = latest.state;
+                });
+                observer.observe("cpu").catch(() => { /* not supported on this device */ });
+                this.pressureObserver = observer;
+            }
+        } catch { /* Compute Pressure API not available */ }
+    }
+
     start(): void {
         this.startTime = performance.now();
         this.lastFrameTime = this.startTime;
@@ -132,7 +163,6 @@ export class PerformanceTracker {
         this.frameTimes.reset();
         this.inferenceTimes.reset();
         this.processingTimes.reset();
-        // Reset new metrics
         this.totalFacesDetected = 0;
         this.totalHandsDetected = 0;
         this.detectionFrameCount = 0;
@@ -178,6 +208,10 @@ export class PerformanceTracker {
 
     setModelLoadTime(timeMs: number): void {
         this.modelLoadTimeMs = timeMs;
+    }
+
+    setGpuDelegateActive(active: boolean): void {
+        this.gpuDelegateActive = active;
     }
 
     recordError(): void {
@@ -229,7 +263,7 @@ export class PerformanceTracker {
             this.trackingLostTime = 0;
             this.currentConsecutiveLoss = 0;
         } else if (!hasTracking && !this.lastTrackingValid) {
-            // Still lost - increment consecutive loss
+            // Still lost — increment consecutive loss counter
             this.currentConsecutiveLoss++;
             if (this.currentConsecutiveLoss > this.consecutiveTrackingLossMax) {
                 this.consecutiveTrackingLossMax = this.currentConsecutiveLoss;
@@ -252,10 +286,9 @@ export class PerformanceTracker {
         const fps = avgFrameTime > 0 ? 1000 / avgFrameTime : 0;
         const avgFps = sessionDuration > 0 ? (this.frameCount * 1000) / sessionDuration : 0;
 
-        // Memory metrics (Chrome/Edge only)
+        // JS heap memory (Chrome/Edge only)
         const perfMemory = (performance as PerformanceWithMemory).memory;
         const memoryUsageMB = perfMemory ? perfMemory.usedJSHeapSize / (1024 * 1024) : undefined;
-        const totalMemoryMB = perfMemory ? perfMemory.totalJSHeapSize / (1024 * 1024) : undefined;
         const heapLimitMB = perfMemory ? perfMemory.jsHeapSizeLimit / (1024 * 1024) : undefined;
 
         // Network metrics
@@ -292,11 +325,15 @@ export class PerformanceTracker {
             frameProcessingTimeMs: Math.round(this.processingTimes.last() * 100) / 100,
             avgFrameProcessingTimeMs: Math.round(this.processingTimes.average() * 100) / 100,
             memoryUsageMB: memoryUsageMB ? Math.round(memoryUsageMB * 10) / 10 : undefined,
-            totalMemoryMB: totalMemoryMB ? Math.round(totalMemoryMB * 10) / 10 : undefined,
+            // totalMemoryMB: physical device RAM via Device Memory API (same semantics as native)
+            totalMemoryMB: this.totalDeviceMemoryMB,
             heapLimitMB: heapLimitMB ? Math.round(heapLimitMB * 10) / 10 : undefined,
             cpuCores: this.cpuCores,
             gpuVendor: this.gpuVendor,
             gpuRenderer: this.gpuRenderer,
+            gpuDelegateActive: this.gpuDelegateActive,
+            // thermalState via Compute Pressure API (Chrome 125+), same state names as iOS
+            thermalState: this.computePressureState,
             batteryLevel: this.batteryManager?.level,
             batteryCharging: this.batteryManager?.charging,
             networkType: connection?.effectiveType,
@@ -316,13 +353,14 @@ export class PerformanceTracker {
             trackingLostCount: this.trackingLostCount,
             // Stability metrics
             peakMemoryUsageMB: this.peakMemoryUsageMB > 0 ? Math.round(this.peakMemoryUsageMB * 10) / 10 : undefined,
-            gpuDelegateActive: undefined, // Not applicable for PWA (WebGL is always used)
             trackingRecoveryTimeMs,
             consecutiveTrackingLossMax: this.consecutiveTrackingLossMax > 0 ? this.consecutiveTrackingLossMax : undefined,
             errorCount: this.errorCount > 0 ? this.errorCount : undefined,
         };
     }
 }
+
+// ---- Type augmentations for non-standard Web APIs ----
 
 interface BatteryManager {
     level: number;
@@ -331,6 +369,11 @@ interface BatteryManager {
 
 interface NavigatorWithBattery extends Navigator {
     getBattery(): Promise<BatteryManager>;
+}
+
+interface NavigatorWithDeviceMemory extends Navigator {
+    /** Total device RAM in GB, rounded to nearest power of 2 (0.25–8). */
+    deviceMemory?: number;
 }
 
 interface PerformanceWithMemory extends Performance {
@@ -347,4 +390,20 @@ interface NavigatorWithConnection extends Navigator {
         downlink?: number;
         rtt?: number;
     };
+}
+
+interface PressureRecord {
+    state: "nominal" | "fair" | "serious" | "critical";
+}
+
+interface PressureObserverInstance {
+    observe(source: string): Promise<void>;
+    unobserve(source: string): void;
+    disconnect(): void;
+}
+
+interface WindowWithPressure extends Window {
+    PressureObserver?: new (
+        callback: (records: PressureRecord[]) => void
+    ) => PressureObserverInstance;
 }

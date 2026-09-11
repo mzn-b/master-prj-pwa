@@ -51,9 +51,41 @@ type InitOpts = {
 export type InitResult = {
     controller: TrackingController;
     modelLoadTimeMs: number;
-    /** Whether the GPU delegate was requested and likely active */
+    /**
+     * Whether the GPU delegate is actually in use — not merely requested.
+     *
+     * This used to report the *request*, while the native app reports the
+     * outcome (it attempts GPU, catches, and falls back to CPU). The same column
+     * therefore meant two different things in the two datasets, and a browser
+     * silently running on CPU would still have been recorded as GPU. See NF4.
+     */
     gpuDelegateUsed: boolean;
+    /**
+     * Whether the browser could give us a WebGL2 context at all — the
+     * precondition for MediaPipe's GPU delegate. Recorded separately because a
+     * missing context is a browser-capability finding, not a failure of ours.
+     */
+    webgl2Available: boolean;
 };
+
+/**
+ * Probe for the context MediaPipe's GPU delegate needs.
+ *
+ * Runs in a worker too, where `document` does not exist — hence OffscreenCanvas.
+ */
+function hasWebGL2(): boolean {
+    try {
+        if (typeof OffscreenCanvas !== "undefined") {
+            return new OffscreenCanvas(1, 1).getContext("webgl2") !== null;
+        }
+        if (typeof document !== "undefined") {
+            return document.createElement("canvas").getContext("webgl2") !== null;
+        }
+    } catch {
+        return false;
+    }
+    return false;
+}
 
 /**
  * MediaPipe lifecycle and per-frame inference, including the NF7 dropout grace.
@@ -89,53 +121,73 @@ export class TrackingController {
         const shouldFace = mode === "face" || mode === "combined";
         const shouldHand = mode === "hand" || mode === "combined";
 
-        const baseOptions = {
-            delegate: useGPU ? "GPU" as const : "CPU" as const,
-        };
+        // Mirror the native engine: ask for GPU, fall back to CPU if the task
+        // refuses to build, and report which one we actually ended up on.
+        const webgl2Available = hasWebGL2();
+        const wantGPU = useGPU && webgl2Available;
+        let gpuOk = wantGPU;
 
-        const [face, hand] = await Promise.all([
-            shouldFace
-                ? FaceLandmarker.createFromOptions(fileset, {
-                    baseOptions: {
-                        ...baseOptions,
-                        modelAssetPath: `${modelBase}/face_landmarker.task`,
-                    },
-                    runningMode: "VIDEO",
-                    numFaces: opts.maxFaces ?? 1,
-                    minFaceDetectionConfidence: MIN_DETECTION_CONFIDENCE,
-                    minFacePresenceConfidence: MIN_PRESENCE_CONFIDENCE,
-                    minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
-                    // F12 — emit blendshapes (~52 morph-target weights for mimicry analysis).
-                    // The native plugin always emits blendshapes, so we match here for symmetry.
-                    outputFaceBlendshapes: true,
-                    outputFacialTransformationMatrixes: false,
-                })
-                : Promise.resolve(undefined),
+        const baseOptionsFor = (delegate: "GPU" | "CPU") => ({delegate});
 
-            shouldHand
-                // F13 — GestureRecognizer is a HandLandmarker superset that also classifies
-                // gestures (Thumb_Up, Open_Palm, Pointing_Up, Victory, Closed_Fist, ILoveYou,
-                // Thumb_Down, None). Returns the same 21 landmarks per hand.
-                ? GestureRecognizer.createFromOptions(fileset, {
-                    baseOptions: {
-                        ...baseOptions,
-                        modelAssetPath: `${modelBase}/gesture_recognizer.task`,
-                    },
-                    runningMode: "VIDEO",
-                    numHands: opts.maxHands ?? 2,
-                    minHandDetectionConfidence: MIN_DETECTION_CONFIDENCE,
-                    minHandPresenceConfidence: MIN_PRESENCE_CONFIDENCE,
-                    minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
-                })
-                : Promise.resolve(undefined),
-        ]);
+        const buildFace = (delegate: "GPU" | "CPU") =>
+            FaceLandmarker.createFromOptions(fileset, {
+                baseOptions: {
+                    ...baseOptionsFor(delegate),
+                    modelAssetPath: `${modelBase}/face_landmarker.task`,
+                },
+                runningMode: "VIDEO" as const,
+                numFaces: opts.maxFaces ?? 1,
+                minFaceDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+                minFacePresenceConfidence: MIN_PRESENCE_CONFIDENCE,
+                minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+                // F12 — emit blendshapes (~52 morph-target weights for mimicry
+                // analysis). The native plugin always emits them, so we match.
+                outputFaceBlendshapes: true,
+                outputFacialTransformationMatrixes: false,
+            });
+
+        const buildHand = (delegate: "GPU" | "CPU") =>
+            // F13 — GestureRecognizer is a HandLandmarker superset that also
+            // classifies gestures. Returns the same 21 landmarks per hand.
+            GestureRecognizer.createFromOptions(fileset, {
+                baseOptions: {
+                    ...baseOptionsFor(delegate),
+                    modelAssetPath: `${modelBase}/gesture_recognizer.task`,
+                },
+                runningMode: "VIDEO" as const,
+                numHands: opts.maxHands ?? 2,
+                minHandDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+                minHandPresenceConfidence: MIN_PRESENCE_CONFIDENCE,
+                minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+            });
+
+        const preferred = wantGPU ? "GPU" as const : "CPU" as const;
+
+        const face = shouldFace
+            ? await buildFace(preferred).catch(async () => {
+                  gpuOk = false;
+                  return buildFace("CPU");
+              })
+            : undefined;
+
+        const hand = shouldHand
+            ? await buildHand(preferred).catch(async () => {
+                  gpuOk = false;
+                  return buildHand("CPU");
+              })
+            : undefined;
 
         const modelLoadTimeMs = Math.round(performance.now() - startTime);
-        console.log(`[TrackingController] Initialized with ${useGPU ? "GPU" : "CPU"} delegate in ${modelLoadTimeMs}ms`);
+        console.log(
+            `[TrackingController] delegate=${gpuOk ? "GPU" : "CPU"} ` +
+                `(requested ${useGPU ? "GPU" : "CPU"}, webgl2=${webgl2Available}) ` +
+                `in ${modelLoadTimeMs}ms`,
+        );
         return {
             controller: new TrackingController(face, hand),
             modelLoadTimeMs,
-            gpuDelegateUsed: useGPU,
+            gpuDelegateUsed: gpuOk,
+            webgl2Available,
         };
     }
 

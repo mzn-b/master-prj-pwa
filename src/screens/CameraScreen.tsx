@@ -104,6 +104,16 @@ export function CameraScreen() {
         capabilitiesRef.current = capabilities;
         if (capabilities) {
             console.log(`[CameraScreen] Renderer backend: ${capabilities.backend}`);
+            // The renderer initialises lazily, on the first draw after start, so
+            // on the very first session of a page load `capabilities` is still
+            // null when the run conditions are recorded — and that session lands
+            // in the database with a null renderBackend. Push it again as soon
+            // as it is known; setRunConditions merges, so this only fills the
+            // gap. Observed on device: the first PWA run per device recorded no
+            // backend while every later run recorded "webgpu".
+            performanceTrackerRef.current?.setRunConditions({
+                renderBackend: capabilities.backend,
+            });
         }
     }, [capabilities]);
 

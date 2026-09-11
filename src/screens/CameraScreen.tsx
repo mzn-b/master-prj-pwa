@@ -7,7 +7,7 @@ import {
     type TrackingEngine,
 } from "../tracking/engines";
 import {subscribeToVideoFrames} from "../tracking/videoFrames";
-import {PerformanceTracker, WARMUP_FRAMES} from "../tracking/PerformanceTracker";
+import {PerformanceTracker} from "../tracking/PerformanceTracker";
 import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother} from "../tracking/LandmarkSmoother";
 import {
     canStartTracking,
@@ -17,6 +17,8 @@ import {
     DynamicInferenceController,
 } from "../tracking/TrackingConfig";
 import {PerformanceOverlay} from "../ui/PerformanceOverlay";
+import {color, s} from "../ui/theme";
+import {Switch} from "../ui/Switch";
 import {submitTrackingSession} from "../api/trackingApi";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
@@ -39,8 +41,7 @@ export function CameraScreen() {
     const [isTrackingActive, setIsTrackingActive] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [warnings, setWarnings] = useState<string[]>([]);
-    const [showPerformance, setShowPerformance] = useState(true);
-    const [showSettings, setShowSettings] = useState(false);
+    const [showPerformance, setShowPerformance] = useState(false);
     const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetricsDTO | null>(null);
     const [deviceCapabilities, setDeviceCapabilities] = useState<DeviceCapabilities | null>(null);
     const [isCheckingDevice, setIsCheckingDevice] = useState(true);
@@ -53,7 +54,7 @@ export function CameraScreen() {
      * §3a — where MediaPipe runs. A runtime toggle rather than a build flag so a
      * single build can measure both, and every session records which mode it used.
      */
-    const [threading, setThreading] = useState<InferenceThreading>("worker");
+    const [threading, setThreading] = useState<InferenceThreading>("main");
     const [latestTracking, setLatestTracking] = useState<TrackingDTO | null>(null);
 
     const [isUploading, setIsUploading] = useState(false);
@@ -434,207 +435,42 @@ export function CameraScreen() {
         })().catch(() => {});
     }, [isRunning, mode, appMode, threading, start, stop]);
 
+    const status = isUploading
+        ? "Sende Daten…"
+        : isRunning
+          ? "Tracking aktiv"
+          : uploadStatus === "success"
+            ? "Daten gesendet"
+            : uploadStatus === "error"
+              ? "Senden fehlgeschlagen"
+              : uploadStatus === "skipped"
+                ? "Nicht gesendet (kein mobiles Gerät)"
+                : "Tracking gestoppt";
+
+    const surveyUrl = import.meta.env.VITE_UX_SURVEY_URL
+        ? `${import.meta.env.VITE_UX_SURVEY_URL}${
+              import.meta.env.VITE_UX_SURVEY_URL.includes("?") ? "&" : "?"
+          }platform=PWA`
+        : null;
+
+    /** One settings row: label left, switch right — SettingsSheet.tsx. */
+    const toggle = (label: string, value: boolean, onChange: (next: boolean) => void, disabled = false) => (
+        <label style={{...s.settingsRow, opacity: disabled ? 0.5 : 1}}>
+            <span style={s.settingsLabel}>{label}</span>
+            <Switch label={label} checked={value} disabled={disabled} onChange={onChange} />
+        </label>
+    );
+
     return (
-        <div style={{padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"}}>
-            <h1 style={{margin: 0, marginBottom: 12}}>Tracking PWA (Face + Hand)</h1>
-
-            {/* App mode toggle */}
-            <div style={{display: "flex", gap: 4, marginBottom: 12}}>
-                {(['landmarks', 'filters'] as AppMode[]).map(m => (
-                    <button
-                        key={m}
-                        disabled={isRunning}
-                        onClick={() => setAppMode(m)}
-                        style={{
-                            padding: "6px 16px",
-                            borderRadius: 6,
-                            border: "none",
-                            cursor: isRunning ? "default" : "pointer",
-                            background: appMode === m ? "#4f46e5" : "#374151",
-                            color: "#fff",
-                            fontWeight: appMode === m ? "bold" : "normal",
-                        }}
-                    >
-                        {m === 'landmarks' ? 'Landmarks' : 'Filters'}
-                    </button>
-                ))}
-            </div>
-
-            {warnings.length > 0 && (
-                <div style={{marginBottom: 12, padding: 8, background: "#fef3c7", borderRadius: 8, color: "#92400e"}}>
-                    {warnings.map((w, i) => <div key={i}>Hinweis: {w}</div>)}
-                </div>
-            )}
-
-            <div style={{display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap"}}>
-                {appMode === 'landmarks' && (
-                    <div style={{display: "flex", gap: 4}}>
-                        {(["face", "hand", "combined"] as TrackingMode[]).map(m => (
-                            <button
-                                key={m}
-                                disabled={isRunning}
-                                onClick={() => setMode(m)}
-                                style={{
-                                    padding: "6px 16px",
-                                    borderRadius: 6,
-                                    border: "none",
-                                    cursor: isRunning ? "default" : "pointer",
-                                    background: mode === m ? "#4f46e5" : "#374151",
-                                    color: "#fff",
-                                    fontWeight: mode === m ? "bold" : "normal",
-                                    textTransform: "capitalize",
-                                }}
-                            >
-                                {m}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
-                {appMode === 'filters' && (
-                    <div style={{display: "flex", gap: 6, alignItems: "center"}}>
-                        <span style={{color: "#9ca3af", fontSize: 13}}>Filters:</span>
-                        {FILTER_IDS.map(id => (
-                            <button
-                                key={id}
-                                onClick={() => handleFilterToggle(id)}
-                                style={{
-                                    padding: "4px 12px",
-                                    borderRadius: 6,
-                                    border: "2px solid",
-                                    borderColor: activeFilters[id] ? "#10b981" : "#4b5563",
-                                    cursor: "pointer",
-                                    background: activeFilters[id] ? "#064e3b" : "#1f2937",
-                                    color: activeFilters[id] ? "#10b981" : "#9ca3af",
-                                    fontWeight: activeFilters[id] ? "bold" : "normal",
-                                    fontSize: 13,
-                                }}
-                            >
-                                {FILTER_LABELS[id]}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
-                <button onClick={start} disabled={!canStart}>
-                    {isCheckingDevice ? "Prüfe..." : "Start"}
-                </button>
-                <button onClick={stop} disabled={!isRunning}>
-                    Stop
-                </button>
-
-                <button onClick={() => setShowPerformance((p) => !p)} style={{marginLeft: 8}}>
-                    {showPerformance ? "Hide Metrics" : "Show Metrics"}
-                </button>
-                <button onClick={() => setShowSettings((s) => !s)}>
-                    Settings
-                </button>
-
-                {import.meta.env.VITE_UX_SURVEY_URL && (
-                    <a
-                        href={`${import.meta.env.VITE_UX_SURVEY_URL}${import.meta.env.VITE_UX_SURVEY_URL.includes('?') ? '&' : '?'}platform=PWA`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            padding: "6px 12px",
-                            borderRadius: 6,
-                            background: "#0ea5e9",
-                            color: "#fff",
-                            textDecoration: "none",
-                            fontSize: 13,
-                        }}
-                    >
-                        UX Feedback
-                    </a>
-                )}
-
-                <span style={{opacity: 0.8}}>
-                    Status: {isRunning ? "läuft" : "gestoppt"}
-                    {isRunning && !performanceMetrics?.warmupComplete && " (Warmup...)"}
-                    {isUploading && " | Sende Daten..."}
-                    {uploadStatus === "success" && " | Daten gesendet ✓"}
-                    {uploadStatus === "skipped" && " | Nicht gesendet (kein mobiles Gerät)"}
-                    {uploadStatus === "error" && " | Fehler beim Senden"}
-                </span>
-            </div>
-
-            {showSettings && (
-                <div style={{marginBottom: 12, padding: 12, background: "#1f2937", borderRadius: 8, color: "#e5e7eb"}}>
-                    <h3 style={{margin: "0 0 8px 0", fontSize: 14}}>Einstellungen</h3>
-                    <div style={{marginBottom: 8}}>
-                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
-                            <input
-                                type="checkbox"
-                                checked={smoothingEnabled}
-                                onChange={(e) => setSmoothingEnabled(e.target.checked)}
-                            />
-                            F9: Landmark-Glättung (reduziert Jitter)
-                        </label>
-                    </div>
-                    <div style={{marginBottom: 8}}>
-                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
-                            <input
-                                type="checkbox"
-                                checked={dynamicInferenceEnabled}
-                                onChange={(e) => setDynamicInferenceEnabled(e.target.checked)}
-                            />
-                            F15: Dynamische Inferenzrate (passt sich an Geräteleistung an)
-                        </label>
-                        {dynamicInferenceEnabled && (
-                            <div style={{marginLeft: 24, marginTop: 4, fontSize: 12, color: "#9ca3af"}}>
-                                Aktueller Frame-Skip: {currentFrameSkip} (verarbeitet jeden {currentFrameSkip}. Frame)
-                            </div>
-                        )}
-                    </div>
-                    <div style={{marginBottom: 8}}>
-                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
-                            <input
-                                type="checkbox"
-                                checked={showDebug}
-                                onChange={(e) => setShowDebug(e.target.checked)}
-                            />
-                            F14: Debug-HUD (Koordinaten + Tracking-Status)
-                        </label>
-                    </div>
-                    <div style={{marginBottom: 8}}>
-                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
-                            <input
-                                type="checkbox"
-                                disabled={isRunning}
-                                checked={threading === "worker"}
-                                onChange={(e) => setThreading(e.target.checked ? "worker" : "main")}
-                            />
-                            Inferenz im Web Worker (statt im Main-Thread)
-                        </label>
-                        <div style={{marginLeft: 24, marginTop: 4, fontSize: 12, color: "#9ca3af"}}>
-                            Der Worker entspricht dem Async-Runner der Native-App. Wird pro
-                            Messung als <code>inferenceThreading</code> mitgesendet.
-                            {isRunning && " Nur zwischen Sessions umschaltbar."}
-                        </div>
-                    </div>
-                    <div style={{fontSize: 12, color: "#9ca3af"}}>
-                        F11: Warmup-Phase: {performanceMetrics?.warmupComplete
-                            ? "Abgeschlossen"
-                            : `Läuft (${WARMUP_FRAMES} Frames)`}
-                    </div>
-                </div>
-            )}
-
-            {displayError && (
-                <div style={{marginBottom: 12, color: "crimson"}}>Fehler: {displayError}</div>
-            )}
-
-            <div style={{position: "relative", width: "100%", background: "#111827", borderRadius: 12, overflow: "hidden"}}>
+        <div style={s.root}>
+            <div style={s.preview}>
                 {!isRunning && (
-                    <div style={{
-                        position: "absolute", inset: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        color: "#6b7280", flexDirection: "column", gap: 8,
-                    }}>
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                            <path d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"/>
-                        </svg>
-                        <span>Drücke Start um die Kamera zu aktivieren</span>
+                    <div style={s.placeholder}>
+                        {isCheckingDevice
+                            ? "Gerät wird geprüft…"
+                            : canStart
+                              ? "Bereit — Start drücken"
+                              : "Kamerazugriff erforderlich"}
                     </div>
                 )}
 
@@ -643,28 +479,33 @@ export function CameraScreen() {
                     playsInline
                     muted
                     style={{
-                        width: "100%", height: "100%",
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
                         objectFit: "cover",
                         transform: "scaleX(-1)",
                         display: isRunning ? "block" : "none",
                     }}
                 />
 
-                {/* Landmark canvas — landmarks mode only.
-                    Deliberately NOT CSS-mirrored: selfie mirroring is applied by
-                    projectNormalized, the same way the filter overlays get it. */}
-                <div style={{
-                    position: "absolute", inset: 0,
-                    display: isRunning && appMode === 'landmarks' ? "block" : "none",
-                }}>
+                {/* Landmark canvas — landmarks mode only. Deliberately NOT
+                    CSS-mirrored: selfie mirroring is applied by projectNormalized,
+                    the same way the filter overlays get it. */}
+                <div
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: isRunning && appMode === "landmarks" ? "block" : "none",
+                    }}
+                >
                     <canvas
                         ref={canvasRef}
                         style={{position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none"}}
                     />
                 </div>
 
-                {/* AR filter overlay — filter mode only */}
-                {isRunning && appMode === 'filters' && (
+                {isRunning && appMode === "filters" && (
                     <FilterOverlay
                         ref={filterOverlayRef}
                         activeFilters={activeFilters}
@@ -673,14 +514,131 @@ export function CameraScreen() {
                     />
                 )}
 
-                {isRunning && (
-                    <PerformanceOverlay
-                        metrics={performanceMetrics}
-                        visible={showPerformance}
-                        debug={showDebug}
-                        tracking={latestTracking}
-                    />
-                )}
+                <div style={s.hudLayer}>
+                    {isRunning && (
+                        <PerformanceOverlay
+                            metrics={performanceMetrics}
+                            visible={showPerformance}
+                            debug={showDebug}
+                            tracking={latestTracking}
+                            currentFrameSkip={currentFrameSkip}
+                        />
+                    )}
+                </div>
+            </div>
+
+            <div style={s.panel}>
+                <div style={s.panelContent}>
+                    {/* SessionControls.tsx: one button that flips Start/Stop, then a status dot. */}
+                    <div style={s.controlRow}>
+                        <button
+                            onClick={isRunning ? stop : start}
+                            disabled={isRunning ? false : !canStart}
+                            style={{
+                                ...s.button,
+                                background: isRunning
+                                    ? color.stop
+                                    : canStart
+                                      ? color.primary
+                                      : color.muted,
+                                cursor: isRunning || canStart ? "pointer" : "default",
+                            }}
+                        >
+                            {isRunning ? "Stop" : "Start"}
+                        </button>
+                        <div style={s.statusRow}>
+                            <div
+                                style={{
+                                    ...s.dot,
+                                    background: isRunning ? color.dotActive : color.dotIdle,
+                                }}
+                            />
+                            <span style={s.status}>{status}</span>
+                        </div>
+                    </div>
+
+                    {displayError && <div style={s.error}>Kamera: {displayError}</div>}
+                    {warnings.map(w => (
+                        <div key={w} style={s.warning}>
+                            {w}
+                        </div>
+                    ))}
+
+                    <div style={s.row}>
+                        {(["landmarks", "filters"] as AppMode[]).map(candidate => (
+                            <button
+                                key={candidate}
+                                onClick={() => !isRunning && setAppMode(candidate)}
+                                style={{
+                                    ...s.tab,
+                                    ...(appMode === candidate
+                                        ? {background: color.primary, fontWeight: 700}
+                                        : {}),
+                                }}
+                            >
+                                {candidate === "landmarks" ? "Landmarks" : "Filters"}
+                            </button>
+                        ))}
+                    </div>
+
+                    {appMode === "landmarks" ? (
+                        <div style={s.row}>
+                            {(["face", "hand", "combined"] as TrackingMode[]).map(candidate => (
+                                <button
+                                    key={candidate}
+                                    disabled={isRunning}
+                                    onClick={() => setMode(candidate)}
+                                    style={{
+                                        ...s.chip,
+                                        ...(mode === candidate ? {background: color.primary} : {}),
+                                        ...(isRunning ? {opacity: 0.5, cursor: "default"} : {}),
+                                    }}
+                                >
+                                    {candidate}
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={s.row}>
+                            {FILTER_IDS.map(id => (
+                                <button
+                                    key={id}
+                                    onClick={() => handleFilterToggle(id)}
+                                    style={{
+                                        ...s.filterChip,
+                                        ...(activeFilters[id]
+                                            ? {borderColor: color.primary, background: color.filterActive}
+                                            : {}),
+                                    }}
+                                >
+                                    {FILTER_LABELS[id]}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* SettingsSheet.tsx — always visible in the panel, not behind a button. */}
+                    <div style={s.settingsCard}>
+                        {toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
+                        {toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
+                        {toggle("Performance-HUD", showPerformance, setShowPerformance)}
+                        {toggle("F14: Debug-HUD", showDebug, setShowDebug)}
+                        {/* No native counterpart: the threading toggle exists only on
+                            the web side, because only the web has two options to
+                            compare. Kept last so the shared rows line up. */}
+                        {toggle(
+                            "Inferenz im Web Worker",
+                            threading === "worker",
+                            next => setThreading(next ? "worker" : "main"),
+                            isRunning,
+                        )}
+                        {surveyUrl && (
+                            <a href={surveyUrl} target="_blank" rel="noopener noreferrer" style={s.surveyButton}>
+                                UX Feedback
+                            </a>
+                        )}
+                    </div>
+                </div>
             </div>
         </div>
     );

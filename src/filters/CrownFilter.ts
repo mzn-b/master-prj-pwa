@@ -71,14 +71,33 @@ export class CrownFilter {
 
     const loader = new GLTFLoader()
     loader.load('/filters/crown.glb', (gltf) => {
-      this.crown = gltf.scene
-      // Clip world Z > 0 so the back half of the crown — the part a real head
-      // would hide — is invisible. three's WebGPU backend reads clipping from a
-      // ClippingGroup rather than from the renderer, which is where WebGLRenderer
-      // took it.
+      const model = gltf.scene
+
+      // Normalise the model to a centred unit box, exactly as the native app
+      // does. Without the centring the pivot sits wherever crown.glb happens to
+      // have been authored, so pitch/yaw/roll swing the crown around an
+      // off-centre point instead of turning it in place; without the unit scale
+      // the pixel scaleFactor below means something different on each side.
+      const box = new THREE.Box3().setFromObject(model)
+      const size = box.getSize(new THREE.Vector3())
+      model.position.sub(box.getCenter(new THREE.Vector3()))
+      model.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1))
+
+      // Rotate the pivot, never the model: the model carries the centring offset.
+      const pivot = new THREE.Group()
+      pivot.add(model)
+      this.crown = pivot
+
+      // Clip away the back half of the crown — the part a real head would hide.
+      // The normal must point towards the camera: three discards fragments where
+      // `normal · p + constant < 0`, so (0, 0, 1) keeps the front (z >= 0). This
+      // was (0, 0, -1), which kept the *back* half and clipped the front, and is
+      // why the PWA showed the crown from behind while native showed its face.
+      // three's WebGPU backend reads clipping from a ClippingGroup rather than
+      // from the renderer, which is where WebGLRenderer took it.
       const clipping = new THREE.ClippingGroup()
-      clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)]
-      clipping.add(this.crown)
+      clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)]
+      clipping.add(pivot)
       this.scene.add(clipping)
       this.loaded = true
     })
@@ -153,25 +172,30 @@ export class CrownFilter {
     )
 
     // ── Yaw (Y rotation) ─────────────────────────────────────────────────────
-    // When face turns LEFT in display the nose moves RIGHT in raw-video space
-    // (nose.x increases). (nose.x - faceCenterX) > 0 → positive yaw → right
-    // side of crown rotates toward +Z (clipped), left side comes forward.
+    // When the face turns LEFT in display the nose moves RIGHT in raw-video
+    // space (nose.x increases).
+    //
+    // The sign is negated because the clip plane keeps the +Z half — the side
+    // facing the camera. These signs were originally tuned while the opposite
+    // half was kept, i.e. while the crown was being viewed from behind, and
+    // viewing a rotating object from the far side reverses the apparent sense of
+    // yaw and pitch. Roll is about the view axis and is unaffected.
     const faceCenterX = (el.x + er.x) / 2
     const yaw = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2,
-      (nose.x - faceCenterX) * 8
+      -(nose.x - faceCenterX) * 8
     ))
 
     // ── Pitch (X rotation) ────────────────────────────────────────────────────
-    // Nose-below-eye ratio increases when looking down.
-    // Negative pitch → crown top tilts toward camera so the crown leans forward
-    // and the back spikes enter +Z where the clip plane removes them.
+    // The nose-below-eyes ratio grows as the head looks down, so looking down
+    // must tilt the crown's top away from the camera. Same sign correction as
+    // yaw above — see that note.
     const faceHeight = chin.y - top.y
     const eyeMidY = (el.y + er.y) / 2
     const noseRatio = faceHeight > 0.01
       ? (nose.y - eyeMidY) / faceHeight
       : NEUTRAL_NOSE_RATIO
     const pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3,
-      -(noseRatio - NEUTRAL_NOSE_RATIO) * Math.PI
+      (noseRatio - NEUTRAL_NOSE_RATIO) * Math.PI
     ))
 
     // ── Apply ────────────────────────────────────────────────────────────────

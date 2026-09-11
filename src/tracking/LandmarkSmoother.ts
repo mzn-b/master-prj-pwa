@@ -101,25 +101,22 @@ export class LandmarkSmoother {
 
         const t = tracking.timestampMs / 1000;
         const result: TrackingDTO = {
-            ...tracking,
+            timestampMs: tracking.timestampMs,
+            mode: tracking.mode,
         };
-
-
-        if (tracking.face?.faces) {
-            result.face = this.smoothFaces(tracking.face, t);
-        }
-
-
-        if (tracking.hand?.hands) {
-            result.hand = this.smoothHands(tracking.hand, t);
-        }
-
+        if (tracking.face) result.face = this.smoothFaces(tracking.face, t);
+        if (tracking.hand) result.hand = this.smoothHands(tracking.hand, t);
         return result;
     }
 
+    // Both smoothers spread the source object and replace only `landmarks`.
+    // Rebuilding the object from scratch (as this used to) silently dropped
+    // `blendshapes` (F12) and `gesture`/`gestureScore` (F13) — and since
+    // smoothing is on by default, both features were dead in normal operation.
     private smoothFaces(face: FaceLandmarksDTO, t: number): FaceLandmarksDTO {
         return {
             faces: face.faces.map((f, faceIndex) => ({
+                ...f,
                 landmarks: this.smoothLandmarks(f.landmarks, t, this.faceFilters, faceIndex),
             })),
         };
@@ -128,7 +125,7 @@ export class LandmarkSmoother {
     private smoothHands(hand: HandLandmarksDTO, t: number): HandLandmarksDTO {
         return {
             hands: hand.hands.map((h, handIndex) => ({
-                handedness: h.handedness,
+                ...h,
                 landmarks: this.smoothLandmarks(h.landmarks, t, this.handFilters, handIndex),
             })),
         };

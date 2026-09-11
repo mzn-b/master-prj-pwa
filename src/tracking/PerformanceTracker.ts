@@ -6,7 +6,13 @@
 
 import type { PerformanceMetricsDTO } from "../domain/tracking.dto";
 
-const WARMUP_FRAMES = 30;
+/**
+ * F11 — frames discarded before min/max fps start being recorded, so first-frame
+ * model warmup and JIT do not show up as the worst measurement of the session.
+ * Exported because the tests and the settings panel both need the real number
+ * rather than a copy of it.
+ */
+export const WARMUP_FRAMES = 30;
 const BUFFER_SIZE = 60;
 
 /** O(1) circular buffer for time series data */
@@ -72,6 +78,9 @@ export class PerformanceTracker {
 
     // Stability tracking
     private peakMemoryUsageMB = 0;
+    // Session-level consumption baselines (snapshotted lazily on first getMetrics call)
+    private batteryLevelStart: number | undefined;
+    private memoryUsageStartMB: number | undefined;
     private errorCount = 0;
     private trackingLostTime = 0;
     private totalRecoveryTimeMs = 0;
@@ -83,6 +92,20 @@ export class PerformanceTracker {
     private modelLoadTimeMs: number | undefined;
     private gpuDelegateActive: boolean | undefined;
 
+    /** NF3 — performance.now() of the first frame that produced a detection. */
+    private firstDetectionAt: number | undefined;
+    /**
+     * NF4 — the conditions this session ran under. Without them two rows that
+     * differ only in capture resolution or threading model are indistinguishable
+     * in the dataset. The native app records the same four.
+     */
+    private runConditions: {
+        frameWidth?: number;
+        frameHeight?: number;
+        renderBackend?: string;
+        inferenceThreading?: string;
+    } = {};
+
     // Cached hardware info (queried once at construction)
     private batteryManager: BatteryManager | null = null;
     private cpuCores: number | undefined;
@@ -92,7 +115,6 @@ export class PerformanceTracker {
 
     // Compute Pressure API (thermalState equivalent, Chrome 125+)
     private computePressureState: string | undefined;
-    private pressureObserver: unknown = null;
 
     constructor() {
         this.initBattery();
@@ -144,8 +166,9 @@ export class PerformanceTracker {
                     const latest = records[records.length - 1];
                     if (latest) this.computePressureState = latest.state;
                 });
+                // The observer is retained by the browser once observe() is called —
+                // no need to hold a JS-side reference.
                 observer.observe("cpu").catch(() => { /* not supported on this device */ });
-                this.pressureObserver = observer;
             }
         } catch { /* Compute Pressure API not available */ }
     }
@@ -167,12 +190,15 @@ export class PerformanceTracker {
         this.totalHandsDetected = 0;
         this.detectionFrameCount = 0;
         this.peakMemoryUsageMB = 0;
+        this.batteryLevelStart = undefined;
+        this.memoryUsageStartMB = undefined;
         this.errorCount = 0;
         this.trackingLostTime = 0;
         this.totalRecoveryTimeMs = 0;
         this.recoveryCount = 0;
         this.currentConsecutiveLoss = 0;
         this.consecutiveTrackingLossMax = 0;
+        this.firstDetectionAt = undefined;
     }
 
     /**
@@ -197,6 +223,8 @@ export class PerformanceTracker {
         this.totalHandsDetected = 0;
         this.detectionFrameCount = 0;
         this.peakMemoryUsageMB = 0;
+        this.batteryLevelStart = undefined;
+        this.memoryUsageStartMB = undefined;
         this.errorCount = 0;
         this.trackingLostTime = 0;
         this.totalRecoveryTimeMs = 0;
@@ -214,8 +242,34 @@ export class PerformanceTracker {
         this.gpuDelegateActive = active;
     }
 
+    setRunConditions(conditions: {
+        frameWidth?: number;
+        frameHeight?: number;
+        renderBackend?: string;
+        inferenceThreading?: string;
+    }): void {
+        this.runConditions = { ...this.runConditions, ...conditions };
+    }
+
     recordError(): void {
         this.errorCount++;
+    }
+
+    /**
+     * F15/NF-comparability: a frame the pipeline saw but did not run inference on.
+     *
+     * Two things produce one in the PWA: the dynamic-inference governor skipping
+     * a frame (`frameCount % frameSkip !== 0`), and a frame whose video timestamp
+     * had not advanced, which MediaPipe refuses. Both are genuinely dropped work.
+     *
+     * This used to be declared, reset and submitted but never incremented, so every
+     * PWA session reported a hard 0 — not a measurement, and directly misleading
+     * next to the native app's real figure. The native app counts the same two
+     * events (governor skip, and the async runner reporting itself busy) so the
+     * column means the same thing on both platforms.
+     */
+    recordDroppedFrame(count = 1): void {
+        this.droppedFrames += count;
     }
 
     recordDetection(facesCount: number, handsCount: number): void {
@@ -228,14 +282,35 @@ export class PerformanceTracker {
         return performance.now();
     }
 
+    /**
+     * NF4 — end-to-end: frame available to landmarks ready, including the video
+     * texture upload into WASM and the conversion of the raw output into points.
+     * The native app brackets the same span, including its own image conversion,
+     * so the two numbers describe the same work.
+     */
     recordInferenceTime(startTime: number): void {
         this.inferenceTimes.push(performance.now() - startTime);
+    }
+
+    /**
+     * Same measurement, already computed.
+     *
+     * The worker path times a frame across a round trip, so the caller holds the
+     * duration rather than a start instant on this thread's clock.
+     */
+    recordInferenceMs(durationMs: number): void {
+        this.inferenceTimes.push(durationMs);
     }
 
     recordFrameEnd(frameStart: number, hasTracking: boolean): void {
         const now = performance.now();
         this.processingTimes.push(now - frameStart);
         this.frameCount++;
+
+        // NF3 — how long the user waits for the first usable result.
+        if (hasTracking && this.firstDetectionAt === undefined) {
+            this.firstDetectionAt = now;
+        }
 
         const frameTime = now - this.lastFrameTime;
         this.lastFrameTime = now;
@@ -299,6 +374,33 @@ export class PerformanceTracker {
             this.peakMemoryUsageMB = memoryUsageMB;
         }
 
+        // Lazy-snapshot baselines on first sample where the value is available.
+        // Battery: the Battery API is async-initialized in the constructor — by the
+        // time the first metrics tick fires it's typically ready. iOS/desktop browsers
+        // that don't expose the API will leave batteryLevelStart undefined → delta null.
+        // Reported as a percentage (0..100). The Battery Status API returns a
+        // 0..1 fraction; Android's BATTERY_PROPERTY_CAPACITY returns 0..100.
+        // They share the `battery_level*` columns, so without this normalisation
+        // an Android row reading 78 and a PWA row reading 0.78 mean the same
+        // thing and any aggregate mixing platforms is wrong by 100x.
+        const rawLevel = this.batteryManager?.level;
+        const batteryLevel = rawLevel !== undefined ? rawLevel * 100 : undefined;
+        if (this.batteryLevelStart === undefined && batteryLevel !== undefined) {
+            this.batteryLevelStart = batteryLevel;
+        }
+        if (this.memoryUsageStartMB === undefined && memoryUsageMB !== undefined) {
+            this.memoryUsageStartMB = memoryUsageMB;
+        }
+
+        // Both operands are already percentages, so this is a plain difference
+        // rounded to two decimals — the same number the field carried before.
+        const batteryDeltaPercent = (this.batteryLevelStart !== undefined && batteryLevel !== undefined)
+            ? Math.round((this.batteryLevelStart - batteryLevel) * 100) / 100
+            : undefined;
+        const memoryDeltaMB = (this.memoryUsageStartMB !== undefined && memoryUsageMB !== undefined)
+            ? Math.round((memoryUsageMB - this.memoryUsageStartMB) * 10) / 10
+            : undefined;
+
         // Calculate detection averages
         const facesDetectedAvg = this.detectionFrameCount > 0
             ? Math.round((this.totalFacesDetected / this.detectionFrameCount) * 100) / 100
@@ -334,8 +436,11 @@ export class PerformanceTracker {
             gpuDelegateActive: this.gpuDelegateActive,
             // thermalState via Compute Pressure API (Chrome 125+), same state names as iOS
             thermalState: this.computePressureState,
-            batteryLevel: this.batteryManager?.level,
+            batteryLevel,
             batteryCharging: this.batteryManager?.charging,
+            batteryLevelStart: this.batteryLevelStart,
+            batteryLevelEnd: batteryLevel,
+            batteryDeltaPercent,
             networkType: connection?.effectiveType,
             networkDownlinkMbps: connection?.downlink,
             networkRttMs: connection?.rtt,
@@ -353,9 +458,25 @@ export class PerformanceTracker {
             trackingLostCount: this.trackingLostCount,
             // Stability metrics
             peakMemoryUsageMB: this.peakMemoryUsageMB > 0 ? Math.round(this.peakMemoryUsageMB * 10) / 10 : undefined,
+            memoryUsageStartMB: this.memoryUsageStartMB !== undefined
+                ? Math.round(this.memoryUsageStartMB * 10) / 10
+                : undefined,
+            memoryUsageEndMB: memoryUsageMB !== undefined
+                ? Math.round(memoryUsageMB * 10) / 10
+                : undefined,
+            memoryDeltaMB,
             trackingRecoveryTimeMs,
             consecutiveTrackingLossMax: this.consecutiveTrackingLossMax > 0 ? this.consecutiveTrackingLossMax : undefined,
             errorCount: this.errorCount > 0 ? this.errorCount : undefined,
+
+            // Run conditions
+            frameWidth: this.runConditions.frameWidth,
+            frameHeight: this.runConditions.frameHeight,
+            renderBackend: this.runConditions.renderBackend,
+            inferenceThreading: this.runConditions.inferenceThreading,
+            timeToFirstDetectionMs: this.firstDetectionAt !== undefined
+                ? Math.round((this.firstDetectionAt - this.startTime) * 10) / 10
+                : undefined,
         };
     }
 }

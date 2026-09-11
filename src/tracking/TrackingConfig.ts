@@ -165,10 +165,11 @@ export class DynamicInferenceController {
         const tolerance = this.config.inferenceTimeTolerance;
 
         if (avgInferenceTime > target + tolerance && this.currentFrameSkip < this.config.maxFrameSkip) {
-            // Inference too slow - skip more frames to reduce load
-            this.currentFrameSkip = Math.min(this.currentFrameSkip + 1, this.config.maxFrameSkip);
+            // Jump by 2 if significantly over target (>1.5×), else by 1
+            const step = avgInferenceTime > target * 1.5 ? 2 : 1;
+            this.currentFrameSkip = Math.min(this.currentFrameSkip + step, this.config.maxFrameSkip);
         } else if (avgInferenceTime < target - tolerance && this.currentFrameSkip > this.config.minFrameSkip) {
-            // Inference fast enough - can process more frames
+            // Always decrease by 1 — conservative to avoid oscillation
             this.currentFrameSkip = Math.max(this.currentFrameSkip - 1, this.config.minFrameSkip);
         }
     }

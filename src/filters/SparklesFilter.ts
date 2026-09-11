@@ -1,4 +1,5 @@
 import type { TrackingDTO } from '../domain/tracking.dto'
+import { projectNormalized, type ViewGeometry } from '../render/coordinates'
 
 const FINGERTIP_INDICES = [4, 8, 12, 16, 20]
 const GRAVITY = 120 // px/s²
@@ -27,12 +28,18 @@ export class SparklesFilter {
     this.img.src = '/filters/sparkle.png'
   }
 
-  update(tracking: TrackingDTO, canvasW: number, canvasH: number, nowMs: number): void {
+  /** Whether any particle is still alive — the reason to keep ticking when off. */
+  hasParticles(): boolean {
+    return this.particles.length > 0
+  }
+
+  update(tracking: TrackingDTO, geometry: ViewGeometry, nowMs: number, spawning = true): void {
     const dt = this.lastTime === 0 ? 0.016 : Math.min((nowMs - this.lastTime) / 1000, 0.05)
     this.lastTime = nowMs
 
-    // Spawn new particles at each detected fingertip
-    if (tracking.hand?.hands) {
+    // Spawn new particles at each detected fingertip — only while the filter is
+    // on. When it is off the existing particles still fall and fade out.
+    if (spawning && tracking.hand?.hands) {
       for (const hand of tracking.hand.hands) {
         for (const idx of FINGERTIP_INDICES) {
           const lm = hand.landmarks[idx]
@@ -40,9 +47,9 @@ export class SparklesFilter {
           if (Math.random() > SPAWN_CHANCE) continue
           if (this.particles.length >= MAX_PARTICLES) break
 
-          // Flip X to match CSS-mirrored video display
-          const x = (1 - lm.x) * canvasW
-          const y = lm.y * canvasH
+          // Mirroring and object-fit come from the shared projection —
+          // see src/render/coordinates.ts.
+          const { x, y } = projectNormalized(lm.x, lm.y, geometry)
           const maxLife = 0.6 + Math.random() * 0.6
           this.particles.push({
             x,
@@ -65,8 +72,15 @@ export class SparklesFilter {
       p.life -= dt
     }
 
-    // Remove expired
-    this.particles = this.particles.filter(p => p.life > 0)
+    // Remove expired — compact in-place to avoid per-frame array allocation
+    let writeIdx = 0;
+    for (let i = 0; i < this.particles.length; i++) {
+      if (this.particles[i].life > 0) {
+        if (writeIdx !== i) this.particles[writeIdx] = this.particles[i];
+        writeIdx++;
+      }
+    }
+    this.particles.length = writeIdx;
   }
 
   render(ctx: CanvasRenderingContext2D): void {

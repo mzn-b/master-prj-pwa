@@ -31,10 +31,30 @@ export interface TrackingSessionResponse {
     message: string;
 }
 
-function getPlatform(): Platform {
-    const userAgent = navigator.userAgent.toLowerCase();
-    const isIOS = /iphone|ipad|ipod/.test(userAgent);
-    return isIOS ? "IOS_PWA" : "ANDROID_PWA";
+/** Outcome of a submission attempt. `skipped` is a deliberate no-send, not a failure. */
+export type SubmitResult =
+    | { status: "ok"; response: TrackingSessionResponse }
+    | { status: "skipped"; reason: string }
+    | { status: "error"; reason: string };
+
+/**
+ * The backend's Platform enum has exactly four values, all of them mobile.
+ * A desktop browser is none of them.
+ *
+ * This used to return ANDROID_PWA for "not iOS", so every session run on a
+ * laptop — during development, or while checking the UI — was stored as an
+ * Android session and silently contaminated the platform comparison. Android is
+ * now matched explicitly and anything else yields `null`, which stops the
+ * submission rather than mislabelling it.
+ */
+export function detectPlatform(userAgent: string = navigator.userAgent): Platform | null {
+    if (/iPhone|iPad|iPod/i.test(userAgent)) return "IOS_PWA";
+    // iPadOS 13+ presents a desktop Safari UA; touch points are what give it away.
+    if (/Macintosh/i.test(userAgent) && typeof navigator !== "undefined" && navigator.maxTouchPoints > 1) {
+        return "IOS_PWA";
+    }
+    if (/Android/i.test(userAgent)) return "ANDROID_PWA";
+    return null;
 }
 
 function getDeviceInfo(): DeviceInfo {
@@ -58,7 +78,7 @@ function getDeviceInfo(): DeviceInfo {
     }
 
     // Extract device model (simplified)
-    let deviceModel = "Unknown";
+    let deviceModel: string;
     if (/iphone/i.test(userAgent)) {
         deviceModel = "iPhone";
     } else if (/ipad/i.test(userAgent)) {
@@ -89,9 +109,16 @@ export async function submitTrackingSession(
     mode: TrackingMode,
     metrics: PerformanceMetricsDTO,
     activeFilters: string[] = []
-): Promise<TrackingSessionResponse | null> {
+): Promise<SubmitResult> {
+    const platform = detectPlatform();
+    if (platform === null) {
+        const reason = "Kein mobiles Gerät — Messung wird nicht übertragen.";
+        console.warn(`[trackingApi] ${reason} (${navigator.userAgent})`);
+        return { status: "skipped", reason };
+    }
+
     const request: TrackingSessionRequest = {
-        platform: getPlatform(),
+        platform,
         deviceInfo: getDeviceInfo(),
         sessionId: generateSessionId(),
         mode: mode.toUpperCase() as TrackingMode,
@@ -110,13 +137,15 @@ export async function submitTrackingSession(
         });
 
         if (!response.ok) {
-            console.error("Failed to submit tracking session:", response.status, response.statusText);
-            return null;
+            const reason = `${response.status} ${response.statusText}`;
+            console.error("Failed to submit tracking session:", reason);
+            return { status: "error", reason };
         }
 
-        return await response.json();
+        return { status: "ok", response: await response.json() };
     } catch (error) {
+        const reason = error instanceof Error ? error.message : "Unknown error";
         console.error("Error submitting tracking session:", error);
-        return null;
+        return { status: "error", reason };
     }
 }

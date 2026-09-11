@@ -1,5 +1,12 @@
-import * as THREE from 'three'
+// three/webgpu, not three: the native app renders the identical scene through
+// three's WebGPU backend, and comparing a WebGL crown against a WebGPU one
+// measures the graphics API rather than the platform (NF4). WebGPURenderer falls
+// back to a WebGL backend on its own where WebGPU is unavailable, so this still
+// runs on older Safari — and the backend it actually chose is reported below and
+// submitted with the session.
+import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { projectNormalized, type ViewGeometry } from '../render/coordinates'
 import type { TrackingDTO } from '../domain/tracking.dto'
 
 const FOREHEAD_TOP = 10
@@ -14,25 +21,39 @@ const CHIN = 152
 const NEUTRAL_NOSE_RATIO = 0.38
 
 export class CrownFilter {
-  private renderer: THREE.WebGLRenderer
+  private renderer: THREE.WebGPURenderer
   private scene: THREE.Scene
   private camera: THREE.OrthographicCamera
   private crown: THREE.Object3D | null = null
   private loaded = false
+  private ready = false
+  private pendingSize: { width: number; height: number } | null = null
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
+    this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 2.2
 
-    // Clip world Z > 0 so the back half of the crown (behind the head plane) is invisible.
-    // When the crown pitches or yaws, parts that rotate into +Z vanish naturally.
-    this.renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)]
-
     this.scene = new THREE.Scene()
     this.camera = new THREE.OrthographicCamera(0, 1, 0, 1, -1000, 1000)
+
+    // The WebGPU backend needs an async init before it can draw. Rendering is
+    // skipped until it resolves rather than queued, so a slow init costs a few
+    // frames of crown and nothing else.
+    this.renderer.init().then(
+      () => {
+        this.ready = true
+        if (this.pendingSize) {
+          this.resize(this.pendingSize.width, this.pendingSize.height)
+          this.pendingSize = null
+        }
+      },
+      (e: unknown) => {
+        console.error('[CrownFilter] renderer init failed:', e)
+      },
+    )
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 5.0))
     const front = new THREE.DirectionalLight(0xfffbe8, 6.0)
@@ -51,12 +72,30 @@ export class CrownFilter {
     const loader = new GLTFLoader()
     loader.load('/filters/crown.glb', (gltf) => {
       this.crown = gltf.scene
-      this.scene.add(this.crown)
+      // Clip world Z > 0 so the back half of the crown — the part a real head
+      // would hide — is invisible. three's WebGPU backend reads clipping from a
+      // ClippingGroup rather than from the renderer, which is where WebGLRenderer
+      // took it.
+      const clipping = new THREE.ClippingGroup()
+      clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)]
+      clipping.add(this.crown)
+      this.scene.add(clipping)
       this.loaded = true
     })
   }
 
+  /** Which backend three actually chose — submitted with the session. */
+  backend(): 'webgpu' | 'webgl' | 'pending' {
+    if (!this.ready) return 'pending'
+    const backend = (this.renderer as unknown as { backend?: { isWebGLBackend?: boolean } }).backend
+    return backend?.isWebGLBackend ? 'webgl' : 'webgpu'
+  }
+
   resize(width: number, height: number): void {
+    if (!this.ready) {
+      this.pendingSize = { width, height }
+      return
+    }
     this.renderer.setSize(width, height, false)
     this.camera.left = 0
     this.camera.right = width
@@ -67,8 +106,8 @@ export class CrownFilter {
     this.camera.updateProjectionMatrix()
   }
 
-  render(tracking: TrackingDTO, videoW: number, videoH: number): void {
-    if (!this.loaded || !this.crown) return
+  render(tracking: TrackingDTO, geometry: ViewGeometry): void {
+    if (!this.ready || !this.loaded || !this.crown) return
     const face = tracking.face?.faces[0]
     if (!face || face.landmarks.length === 0) {
       this.renderer.clear()
@@ -85,19 +124,33 @@ export class CrownFilter {
     const chin = lms[CHIN]
     if (!top || !fl || !fr || !el || !er || !nose || !chin) return
 
-    const faceWidthPx = Math.hypot((fr.x - fl.x) * videoW, (fr.y - fl.y) * videoH)
+    // Placement and size go through the shared projection, which owns mirroring
+    // and object-fit. Head pose below stays in raw normalized space, where the
+    // mirroring has not been applied yet — keeping the two apart is what makes
+    // the rotation signs below stable.
+    const pTop   = projectNormalized(top.x, top.y, geometry)
+    const pLeft  = projectNormalized(fl.x, fl.y, geometry)
+    const pRight = projectNormalized(fr.x, fr.y, geometry)
+
+    const faceWidthPx = Math.hypot(pRight.x - pLeft.x, pRight.y - pLeft.y)
     const scaleFactor = (faceWidthPx / 2) * 1.2
 
     // ── Position ────────────────────────────────────────────────────────────
-    // Flip X to match CSS-mirrored video; Y-up camera: convert canvas Y to Three.js Y
-    const cx = (1 - top.x) * videoW
-    const foreheadY = videoH - top.y * videoH
+    // projectNormalized returns top-down CSS pixels; the orthographic camera is
+    // Y-up, so flip Y into its space.
+    const cx = pTop.x
+    const foreheadY = geometry.viewHeight - pTop.y
     const cy = foreheadY + 0.34 * scaleFactor   // base ring sits at forehead landmark
 
     // ── Roll (Z rotation) ────────────────────────────────────────────────────
     // rawRoll < 0 when head tilts right (person's right ear down).
     // rotation.z = rawRoll → CW → display-right side of crown goes down → correct.
-    const roll = Math.atan2((er.y - el.y) * videoH, (er.x - el.x) * videoW)
+    // Aspect-corrected so this is a real on-screen angle rather than an angle in
+    // the unit square. Raw (unmirrored) coordinates, per the note above.
+    const roll = Math.atan2(
+      (er.y - el.y) * geometry.frameHeight,
+      (er.x - el.x) * geometry.frameWidth,
+    )
 
     // ── Yaw (Y rotation) ─────────────────────────────────────────────────────
     // When face turns LEFT in display the nose moves RIGHT in raw-video space

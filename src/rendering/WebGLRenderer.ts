@@ -43,7 +43,7 @@ export class WebGLRenderer implements Renderer {
 
     async init(): Promise<void> {
         // Try WebGL 2 first
-        let gl = this.canvas.getContext("webgl2", {
+        const gl = this.canvas.getContext("webgl2", {
             alpha: true,
             antialias: true,
             premultipliedAlpha: true,

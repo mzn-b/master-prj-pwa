@@ -8,6 +8,7 @@
  */
 
 import type { TrackingDTO } from "../domain/tracking.dto";
+import type { ViewGeometry } from "../render/coordinates";
 
 // ============================================================================
 // Core Renderer Interface
@@ -27,6 +28,12 @@ export interface RenderContext {
     width: number;
     /** Canvas/viewport height */
     height: number;
+    /**
+     * How to turn normalized landmarks into view pixels. Overlays must project
+     * through `src/render/coordinates.ts` rather than scaling by width/height
+     * themselves — see the note at the top of that file.
+     */
+    geometry: ViewGeometry;
     /** Time since last frame in ms */
     deltaTime: number;
     /** Total elapsed time in ms */

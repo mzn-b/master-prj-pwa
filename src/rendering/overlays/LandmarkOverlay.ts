@@ -14,6 +14,7 @@ import type {
     RenderContext,
     LandmarkOverlayConfig,
 } from "../types";
+import { projectNormalized } from "../../render/coordinates";
 
 // Maximum points we can render (face: 478, hands: 21*2 = 42, total ~520)
 const MAX_POINTS = 1024;
@@ -54,6 +55,8 @@ export class LandmarkOverlay implements Overlay {
     private instanceData: Float32Array;
     private facePointCount = 0;
     private handPointCount = 0;
+    // Pre-allocated scratch buffer for WebGPU uniform writes (12 floats: resolution + 2 colors)
+    private readonly uniformScratch = new Float32Array(12);
 
     constructor(config: LandmarkOverlayConfig) {
         this.id = config.id;
@@ -308,15 +311,18 @@ export class LandmarkOverlay implements Overlay {
     }
 
     update(context: RenderContext): void {
-        const { tracking, width, height } = context;
+        const { tracking, geometry } = context;
         if (!tracking) {
             this.facePointCount = 0;
             this.handPointCount = 0;
             return;
         }
 
-        const canvasWidth = width * this.pixelRatio;
-        const canvasHeight = height * this.pixelRatio;
+        // Landmarks are projected to CSS pixels by the shared transform (which
+        // applies selfie mirroring and object-fit), then scaled to device pixels.
+        // The overlay canvas is deliberately *not* CSS-mirrored any more: doing
+        // it here keeps every overlay on one code path.
+        const dpr = this.pixelRatio;
 
         let offset = 0;
         let instanceOffset = 0;
@@ -327,8 +333,9 @@ export class LandmarkOverlay implements Overlay {
         const faceSize = this.config.faceStyle.size * this.pixelRatio;
         for (const face of faces) {
             for (const p of face.landmarks) {
-                const x = p.x * canvasWidth;
-                const y = p.y * canvasHeight;
+                const v = projectNormalized(p.x, p.y, geometry);
+                const x = v.x * dpr;
+                const y = v.y * dpr;
 
                 // WebGL data
                 this.positionData[offset * 2] = x;
@@ -352,8 +359,9 @@ export class LandmarkOverlay implements Overlay {
         const handSize = this.config.handStyle.size * this.pixelRatio;
         for (const hand of hands) {
             for (const p of hand.landmarks) {
-                const x = p.x * canvasWidth;
-                const y = p.y * canvasHeight;
+                const v = projectNormalized(p.x, p.y, geometry);
+                const x = v.x * dpr;
+                const y = v.y * dpr;
 
                 // WebGL data
                 this.positionData[offset * 2] = x;
@@ -394,13 +402,20 @@ export class LandmarkOverlay implements Overlay {
         const canvasWidth = context.width * this.pixelRatio;
         const canvasHeight = context.height * this.pixelRatio;
 
-        // Update uniform buffer
-        const uniformData = new Float32Array([
-            canvasWidth, canvasHeight, 0, 0,  // resolution + padding
-            ...this.config.faceStyle.color,   // faceColor
-            ...this.config.handStyle.color,   // handColor
-        ]);
-        device.queue.writeBuffer(this.gpuUniformBuffer, 0, uniformData);
+        // Update uniform buffer — reuse pre-allocated array to avoid per-frame GC
+        this.uniformScratch[0] = canvasWidth;
+        this.uniformScratch[1] = canvasHeight;
+        this.uniformScratch[2] = 0;
+        this.uniformScratch[3] = 0;
+        this.uniformScratch[4] = this.config.faceStyle.color[0];
+        this.uniformScratch[5] = this.config.faceStyle.color[1];
+        this.uniformScratch[6] = this.config.faceStyle.color[2];
+        this.uniformScratch[7] = this.config.faceStyle.color[3];
+        this.uniformScratch[8]  = this.config.handStyle.color[0];
+        this.uniformScratch[9]  = this.config.handStyle.color[1];
+        this.uniformScratch[10] = this.config.handStyle.color[2];
+        this.uniformScratch[11] = this.config.handStyle.color[3];
+        device.queue.writeBuffer(this.gpuUniformBuffer, 0, this.uniformScratch);
 
         // Update instance buffer
         device.queue.writeBuffer(

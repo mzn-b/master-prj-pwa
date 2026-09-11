@@ -1,7 +1,13 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {TrackingDTO, PerformanceMetricsDTO, TrackingMode} from "../domain/tracking.dto";
-import {TrackingController} from "../tracking/TrackingController";
-import {PerformanceTracker} from "../tracking/PerformanceTracker";
+import {
+    createEngine,
+    type EngineResult,
+    type InferenceThreading,
+    type TrackingEngine,
+} from "../tracking/engines";
+import {subscribeToVideoFrames} from "../tracking/videoFrames";
+import {PerformanceTracker, WARMUP_FRAMES} from "../tracking/PerformanceTracker";
 import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother} from "../tracking/LandmarkSmoother";
 import {
     canStartTracking,
@@ -14,14 +20,17 @@ import {PerformanceOverlay} from "../ui/PerformanceOverlay";
 import {submitTrackingSession} from "../api/trackingApi";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
+import {viewGeometryFromVideo} from "../render/coordinates";
 import type {ActiveFilters, FilterId} from "../filters/types";
 import {DEFAULT_ACTIVE_FILTERS, FILTER_IDS, FILTER_LABELS} from "../filters/types";
-import {FilterOverlay} from "../filters/FilterOverlay";
+import {FilterOverlay, type FilterOverlayHandle} from "../filters/FilterOverlay";
 
 type AppMode = 'landmarks' | 'filters';
 
 export function CameraScreen() {
     const rafRef = useRef<number | null>(null);
+    const filterOverlayRef = useRef<FilterOverlayHandle>(null);
+    const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
     const [mode, setMode] = useState<TrackingMode>("combined");
     const [appMode, setAppMode] = useState<AppMode>('landmarks');
@@ -39,28 +48,45 @@ export function CameraScreen() {
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
     const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
     const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
+    const [showDebug, setShowDebug] = useState(false);
+    /**
+     * §3a — where MediaPipe runs. A runtime toggle rather than a build flag so a
+     * single build can measure both, and every session records which mode it used.
+     */
+    const [threading, setThreading] = useState<InferenceThreading>("worker");
+    const [latestTracking, setLatestTracking] = useState<TrackingDTO | null>(null);
 
     const [isUploading, setIsUploading] = useState(false);
-    const [uploadStatus, setUploadStatus] = useState<"success" | "error" | null>(null);
+    const [uploadStatus, setUploadStatus] = useState<"success" | "skipped" | "error" | null>(null);
 
     // Filter overlay dimensions (updated lazily from RAF loop)
     const [overlayDims, setOverlayDims] = useState({ width: 0, height: 0 });
     const overlayDimsRef = useRef({ width: 0, height: 0 });
 
-    const camera = useCamera();
+    // The screen owns the video element ref and lends it to useCamera — see the
+    // note in useCamera.ts for why the hook does not hand one back.
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const camera = useCamera(videoRef);
 
-    const [controller, setController] = useState<TrackingController | null>(null);
+    const engineRef = useRef<TrackingEngine | null>(null);
     const sessionModeRef = useRef<TrackingMode>(mode);
     const performanceTrackerRef = useRef<PerformanceTracker | null>(null);
     const smootherRef = useRef<LandmarkSmoother | null>(null);
     const dynamicInferenceRef = useRef<DynamicInferenceController | null>(null);
     const metricsIntervalRef = useRef<number | null>(null);
     const frameCountRef = useRef(0);
+    /** Cancels the camera-frame callback, whichever mechanism provided it. */
+    const frameCallbackRef = useRef<(() => void) | null>(null);
+    /** Latest smoothed detection, drawn by the render loop. */
+    const latestSmoothedRef = useRef<TrackingDTO | null>(null);
 
     // Refs to avoid stale closures inside the RAF loop
-    const filterTrackingRef = useRef<TrackingDTO | null>(null);
     const appModeRef = useRef<AppMode>('landmarks');
     const activeFiltersRef = useRef<ActiveFilters>(DEFAULT_ACTIVE_FILTERS);
+    // F14 — latest tracking sample fed to the debug HUD (updated by the metrics interval)
+    const latestTrackingRef = useRef<TrackingDTO | null>(null);
+    const showDebugRef = useRef(false);
+    useEffect(() => { showDebugRef.current = showDebug; }, [showDebug]);
 
     useEffect(() => { appModeRef.current = appMode; }, [appMode]);
     useEffect(() => { activeFiltersRef.current = activeFilters; }, [activeFilters]);
@@ -70,7 +96,12 @@ export function CameraScreen() {
         autoAddLandmarkOverlay: true,
     });
 
+    // §2.10 — the chosen backend is device-dependent (WebGPU where available,
+    // WebGL otherwise), so it is submitted with the session. Two PWA rows are
+    // not comparable if one was drawn by WebGPU and the other by WebGL.
+    const capabilitiesRef = useRef(capabilities);
     useEffect(() => {
+        capabilitiesRef.current = capabilities;
         if (capabilities) {
             console.log(`[CameraScreen] Renderer backend: ${capabilities.backend}`);
         }
@@ -87,9 +118,9 @@ export function CameraScreen() {
         })();
     }, []);
 
-    useEffect(() => {
-        if (camera.error) setError(camera.error);
-    }, [camera.error]);
+    // Derived, not copied into state by an effect: mirroring one piece of state
+    // into another schedules a second render for every camera error.
+    const displayError = error ?? camera.error;
 
     const isRunning = camera.isActive && isTrackingActive;
 
@@ -111,20 +142,24 @@ export function CameraScreen() {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
+        frameCallbackRef.current?.();
+        frameCallbackRef.current = null;
         if (metricsIntervalRef.current != null) {
             clearInterval(metricsIntervalRef.current);
             metricsIntervalRef.current = null;
         }
+        resizeObserverRef.current?.disconnect();
+        resizeObserverRef.current = null;
 
         performanceTrackerRef.current = null;
         smootherRef.current?.reset();
         smootherRef.current = null;
         dynamicInferenceRef.current?.reset();
         dynamicInferenceRef.current = null;
-        filterTrackingRef.current = null;
 
-        controller?.close();
-        setController(null);
+        engineRef.current?.close();
+        engineRef.current = null;
+        latestSmoothedRef.current = null;
         camera.stop();
         setPerformanceMetrics(null);
         frameCountRef.current = 0;
@@ -133,8 +168,8 @@ export function CameraScreen() {
             setIsUploading(true);
             setUploadStatus(null);
             try {
-                const response = await submitTrackingSession(sessionMode, finalMetrics, currentlyActive);
-                setUploadStatus(response ? "success" : "error");
+                const result = await submitTrackingSession(sessionMode, finalMetrics, currentlyActive);
+                setUploadStatus(result.status === "ok" ? "success" : result.status);
             } catch {
                 setUploadStatus("error");
             } finally {
@@ -142,7 +177,7 @@ export function CameraScreen() {
                 setTimeout(() => setUploadStatus(null), 3000);
             }
         }
-    }, [controller, camera]);
+    }, [camera]);
 
     /**
      * Submit current session metrics and reset the tracker, then toggle the filter.
@@ -176,16 +211,10 @@ export function CameraScreen() {
             const cameraStarted = await camera.start();
             if (!cameraStarted) return;
 
-            const video = camera.videoRef.current;
+            const video = videoRef.current;
             if (!video) throw new Error("Video element fehlt.");
 
-            const { controller: c, modelLoadTimeMs, gpuDelegateUsed } = await TrackingController.init(effectiveMode, {maxFaces: 1, maxHands: 2});
-            setController(c);
-
             const perfTracker = new PerformanceTracker();
-            perfTracker.setModelLoadTime(modelLoadTimeMs);
-            perfTracker.setGpuDelegateActive(gpuDelegateUsed);
-            perfTracker.start();
             performanceTrackerRef.current = perfTracker;
 
             smootherRef.current = new LandmarkSmoother({
@@ -197,16 +226,84 @@ export function CameraScreen() {
                 enabled: dynamicInferenceEnabled,
             });
 
+            /**
+             * Called once per completed detection — synchronously on the main
+             * thread, or from the worker's message handler. Everything that must
+             * happen exactly once per inference lives here rather than in the
+             * frame loop, so both threading modes account identically.
+             */
+            const onResult = ({ dto, inferenceMs }: EngineResult) => {
+                const pt = performanceTrackerRef.current;
+                const sm = smootherRef.current;
+                if (!pt) return;
+
+                pt.recordInferenceMs(inferenceMs);
+                const smoothed = sm ? sm.smooth(dto) : dto;
+                latestSmoothedRef.current = smoothed;
+                latestTrackingRef.current = smoothed;
+
+                const facesCount = smoothed.face?.faces?.length ?? 0;
+                const handsCount = smoothed.hand?.hands?.length ?? 0;
+                pt.recordDetection(facesCount, handsCount);
+                // Frame processing = inference plus the smoothing just done, so
+                // back-date the start by the inference we were handed.
+                pt.recordFrameEnd(performance.now() - inferenceMs, facesCount > 0 || handsCount > 0);
+            };
+
+            const engine = await createEngine(threading, {
+                mode: effectiveMode,
+                maxFaces: 1,
+                maxHands: 2,
+                useGPU: true,
+                onResult,
+                onError: message => {
+                    performanceTrackerRef.current?.recordError();
+                    console.error("[CameraScreen] engine error:", message);
+                },
+            });
+            engineRef.current = engine;
+
+            perfTracker.setModelLoadTime(engine.modelLoadTimeMs);
+            perfTracker.setGpuDelegateActive(engine.gpuDelegateActive);
+            perfTracker.setRunConditions({
+                inferenceThreading: engine.threading,
+                renderBackend: capabilitiesRef.current?.backend,
+                frameWidth: video.videoWidth || undefined,
+                frameHeight: video.videoHeight || undefined,
+            });
+            perfTracker.start();
+
             setIsTrackingActive(true);
 
-            // Initialize overlay dimensions immediately
+            // Initialize overlay dimensions and keep them current via ResizeObserver
             const initW = video.clientWidth || 0;
             const initH = video.clientHeight || 0;
             overlayDimsRef.current = { width: initW, height: initH };
             setOverlayDims({ width: initW, height: initH });
 
+            const ro = new ResizeObserver(entries => {
+                const entry = entries[0];
+                if (!entry) return;
+                const { width, height } = entry.contentRect;
+                if (width && height) {
+                    overlayDimsRef.current = { width, height };
+                    setOverlayDims({ width, height });
+                }
+            });
+            ro.observe(video);
+            resizeObserverRef.current = ro;
+
             metricsIntervalRef.current = window.setInterval(() => {
                 if (performanceTrackerRef.current) {
+                    // videoWidth is 0 until the first frame decodes, so the real
+                    // capture size is only knowable a moment after start.
+                    const v = videoRef.current;
+                    if (v?.videoWidth) {
+                        performanceTrackerRef.current.setRunConditions({
+                            frameWidth: v.videoWidth,
+                            frameHeight: v.videoHeight,
+                        });
+                    }
                     const metrics = performanceTrackerRef.current.getMetrics();
                     setPerformanceMetrics(metrics);
                     if (dynamicInferenceRef.current && metrics.avgInferenceTimeMs > 0) {
@@ -214,75 +311,86 @@ export function CameraScreen() {
                         setCurrentFrameSkip(dynamicInferenceRef.current.getCurrentFrameSkip());
                     }
                 }
+                // F14 — only re-render the debug section when it's actually showing
+                if (showDebugRef.current) {
+                    setLatestTracking(latestTrackingRef.current);
+                }
             }, 500);
 
-            let cachedWidth = initW;
-            let cachedHeight = initH;
-            let dimCheckCounter = 0;
-
-            const loop = () => {
-                const v = camera.videoRef.current;
+            /**
+             * Detection is driven by camera frames, not by requestAnimationFrame.
+             *
+             * RAF ticks at display rate — 60 Hz, 120 on a ProMotion panel — while
+             * the camera delivers about 30 fps. Driving detection from RAF meant
+             * MediaPipe re-ran on frames it had already seen, wasting roughly half
+             * the inferences on a fast device and inflating every measurement. The
+             * native app gets exactly one callback per camera frame; this is the
+             * browser's equivalent.
+             */
+            const onCameraFrame = () => {
+                const v = videoRef.current;
                 const pt = performanceTrackerRef.current;
-                const sm = smootherRef.current;
                 const di = dynamicInferenceRef.current;
-
-                if (!v || v.readyState < 2) {
-                    rafRef.current = requestAnimationFrame(loop);
-                    return;
-                }
+                const eng = engineRef.current;
+                if (!v || !eng || v.readyState < 2) return;
 
                 frameCountRef.current++;
 
                 const frameSkip = di?.getCurrentFrameSkip() ?? 1;
                 if (frameCountRef.current % frameSkip !== 0) {
-                    rafRef.current = requestAnimationFrame(loop);
+                    // F15 governor deliberately skipped this frame. It reached the
+                    // pipeline and produced no inference, which is what the
+                    // droppedFrames column measures — the native app counts the
+                    // same event.
+                    pt?.recordDroppedFrame();
                     return;
                 }
 
-                dimCheckCounter++;
-                if (dimCheckCounter >= 60) {
-                    dimCheckCounter = 0;
-                    const newW = v.clientWidth;
-                    const newH = v.clientHeight;
-                    if (newW !== cachedWidth || newH !== cachedHeight) {
-                        cachedWidth = newW;
-                        cachedHeight = newH;
-                        overlayDimsRef.current = { width: newW, height: newH };
-                        setOverlayDims({ width: newW, height: newH });
-                    }
+                const outcome = eng.submit(v, performance.now(), effectiveMode);
+                if (outcome.status === "busy" || outcome.status === "skipped") {
+                    // Busy: inference is behind, so the frame is discarded rather
+                    // than queued. Skipped: the timestamp had not advanced, so
+                    // MediaPipe ran nothing. Both are dropped frames, and the
+                    // native app counts the same two events.
+                    pt?.recordDroppedFrame();
                 }
-
-                const frameStart = pt?.recordFrameStart() ?? 0;
-                const ts = performance.now();
-
-                const inferenceStart = performance.now();
-                let dto = c.detect(v, ts, effectiveMode);
-                pt?.recordInferenceTime(inferenceStart);
-
-                if (sm) dto = sm.smooth(dto);
-
-                const facesCount = dto.face?.faces?.length ?? 0;
-                const handsCount = dto.hand?.hands?.length ?? 0;
-                pt?.recordDetection(facesCount, handsCount);
-                pt?.recordFrameEnd(frameStart, facesCount > 0 || handsCount > 0);
-
-                if (appModeRef.current === 'landmarks') {
-                    renderOverlay(dto, cachedWidth, cachedHeight);
-                } else {
-                    // FilterOverlay drives its own RAF, reading this ref each frame
-                    filterTrackingRef.current = dto;
-                }
-
-                rafRef.current = requestAnimationFrame(loop);
+                // "done" and "scheduled" are accounted for by onResult.
             };
 
-            rafRef.current = requestAnimationFrame(loop);
+            frameCallbackRef.current = subscribeToVideoFrames(video, onCameraFrame);
+
+            /**
+             * Drawing runs on its own RAF loop, reading whatever the last
+             * completed detection was. Detection and drawing are decoupled for the
+             * same reason they are on native: a slow inference should degrade the
+             * tracking rate, not freeze the overlay, and the particle filter needs
+             * a steady tick regardless of detections.
+             */
+            const drawLoop = () => {
+                const v = videoRef.current;
+                if (v && v.readyState >= 2) {
+                    const { width, height } = overlayDimsRef.current;
+                    // One geometry per frame, shared by every overlay — see
+                    // src/render/coordinates.ts.
+                    const geometry = viewGeometryFromVideo(v, width, height);
+                    const dto = latestSmoothedRef.current;
+
+                    if (appModeRef.current === 'landmarks') {
+                        renderOverlay(dto, geometry);
+                    } else {
+                        filterOverlayRef.current?.tick(dto, geometry);
+                    }
+                }
+                rafRef.current = requestAnimationFrame(drawLoop);
+            };
+
+            rafRef.current = requestAnimationFrame(drawLoop);
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Unbekannter Fehler beim Start.";
             setError(msg);
             await stop();
         }
-    }, [mode, smoothingEnabled, dynamicInferenceEnabled, stop, renderOverlay, camera]);
+    }, [mode, smoothingEnabled, dynamicInferenceEnabled, threading, stop, renderOverlay, camera]);
 
     useEffect(() => {
         if (smootherRef.current) {
@@ -299,16 +407,22 @@ export function CameraScreen() {
     // Restart tracking when mode or appMode changes while running
     const prevModeRef = useRef(mode);
     const prevAppModeRef = useRef<AppMode>('landmarks');
+    const prevThreadingRef = useRef<InferenceThreading>(threading);
     useEffect(() => {
         if (!isRunning) return;
-        if (prevModeRef.current === mode && prevAppModeRef.current === appMode) return;
+        if (
+            prevModeRef.current === mode &&
+            prevAppModeRef.current === appMode &&
+            prevThreadingRef.current === threading
+        ) return;
         prevModeRef.current = mode;
         prevAppModeRef.current = appMode;
+        prevThreadingRef.current = threading;
         (async () => {
             await stop();
             await start();
         })().catch(() => {});
-    }, [isRunning, mode, appMode, start, stop]);
+    }, [isRunning, mode, appMode, threading, start, stop]);
 
     return (
         <div style={{padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"}}>
@@ -406,11 +520,30 @@ export function CameraScreen() {
                     Settings
                 </button>
 
+                {import.meta.env.VITE_UX_SURVEY_URL && (
+                    <a
+                        href={`${import.meta.env.VITE_UX_SURVEY_URL}${import.meta.env.VITE_UX_SURVEY_URL.includes('?') ? '&' : '?'}platform=PWA`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                            padding: "6px 12px",
+                            borderRadius: 6,
+                            background: "#0ea5e9",
+                            color: "#fff",
+                            textDecoration: "none",
+                            fontSize: 13,
+                        }}
+                    >
+                        UX Feedback
+                    </a>
+                )}
+
                 <span style={{opacity: 0.8}}>
                     Status: {isRunning ? "läuft" : "gestoppt"}
                     {isRunning && !performanceMetrics?.warmupComplete && " (Warmup...)"}
                     {isUploading && " | Sende Daten..."}
                     {uploadStatus === "success" && " | Daten gesendet ✓"}
+                    {uploadStatus === "skipped" && " | Nicht gesendet (kein mobiles Gerät)"}
                     {uploadStatus === "error" && " | Fehler beim Senden"}
                 </span>
             </div>
@@ -443,14 +576,42 @@ export function CameraScreen() {
                             </div>
                         )}
                     </div>
+                    <div style={{marginBottom: 8}}>
+                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
+                            <input
+                                type="checkbox"
+                                checked={showDebug}
+                                onChange={(e) => setShowDebug(e.target.checked)}
+                            />
+                            F14: Debug-HUD (Koordinaten + Tracking-Status)
+                        </label>
+                    </div>
+                    <div style={{marginBottom: 8}}>
+                        <label style={{display: "flex", alignItems: "center", gap: 8}}>
+                            <input
+                                type="checkbox"
+                                disabled={isRunning}
+                                checked={threading === "worker"}
+                                onChange={(e) => setThreading(e.target.checked ? "worker" : "main")}
+                            />
+                            Inferenz im Web Worker (statt im Main-Thread)
+                        </label>
+                        <div style={{marginLeft: 24, marginTop: 4, fontSize: 12, color: "#9ca3af"}}>
+                            Der Worker entspricht dem Async-Runner der Native-App. Wird pro
+                            Messung als <code>inferenceThreading</code> mitgesendet.
+                            {isRunning && " Nur zwischen Sessions umschaltbar."}
+                        </div>
+                    </div>
                     <div style={{fontSize: 12, color: "#9ca3af"}}>
-                        F11: Warmup-Phase: {performanceMetrics?.warmupComplete ? "Abgeschlossen" : "Läuft (30 Frames)"}
+                        F11: Warmup-Phase: {performanceMetrics?.warmupComplete
+                            ? "Abgeschlossen"
+                            : `Läuft (${WARMUP_FRAMES} Frames)`}
                     </div>
                 </div>
             )}
 
-            {error && (
-                <div style={{marginBottom: 12, color: "crimson"}}>Fehler: {error}</div>
+            {displayError && (
+                <div style={{marginBottom: 12, color: "crimson"}}>Fehler: {displayError}</div>
             )}
 
             <div style={{position: "relative", width: "100%", background: "#111827", borderRadius: 12, overflow: "hidden"}}>
@@ -468,7 +629,7 @@ export function CameraScreen() {
                 )}
 
                 <video
-                    ref={camera.videoRef}
+                    ref={videoRef}
                     playsInline
                     muted
                     style={{
@@ -479,10 +640,11 @@ export function CameraScreen() {
                     }}
                 />
 
-                {/* Landmark canvas — landmarks mode only */}
+                {/* Landmark canvas — landmarks mode only.
+                    Deliberately NOT CSS-mirrored: selfie mirroring is applied by
+                    projectNormalized, the same way the filter overlays get it. */}
                 <div style={{
                     position: "absolute", inset: 0,
-                    transform: "scaleX(-1)",
                     display: isRunning && appMode === 'landmarks' ? "block" : "none",
                 }}>
                     <canvas
@@ -494,7 +656,7 @@ export function CameraScreen() {
                 {/* AR filter overlay — filter mode only */}
                 {isRunning && appMode === 'filters' && (
                     <FilterOverlay
-                        trackingRef={filterTrackingRef}
+                        ref={filterOverlayRef}
                         activeFilters={activeFilters}
                         width={overlayDims.width}
                         height={overlayDims.height}
@@ -502,7 +664,12 @@ export function CameraScreen() {
                 )}
 
                 {isRunning && (
-                    <PerformanceOverlay metrics={performanceMetrics} visible={showPerformance}/>
+                    <PerformanceOverlay
+                        metrics={performanceMetrics}
+                        visible={showPerformance}
+                        debug={showDebug}
+                        tracking={latestTracking}
+                    />
                 )}
             </div>
         </div>

@@ -12,6 +12,7 @@ import { createRenderer, type RendererBackend } from "./createRenderer";
 import { LandmarkOverlay } from "./overlays/LandmarkOverlay";
 import { DEFAULT_LANDMARK_CONFIG } from "./types";
 import type { TrackingDTO } from "../domain/tracking.dto";
+import type { ViewGeometry } from "../render/coordinates";
 
 export interface UseRendererOptions {
     preferredBackend?: RendererBackend;
@@ -21,8 +22,8 @@ export interface UseRendererOptions {
 export interface UseRendererResult {
     /** Reference to attach to a canvas element */
     canvasRef: React.RefObject<HTMLCanvasElement | null>;
-    /** Render tracking data to the overlay. Pass width/height of the video element. */
-    render: (tracking: TrackingDTO | null, width: number, height: number) => void;
+    /** Render tracking data to the overlay. Pass the preview geometry from `viewGeometryFromVideo`. */
+    render: (tracking: TrackingDTO | null, geometry: ViewGeometry) => void;
     /** Whether the renderer is initialized */
     isInitialized: boolean;
     /** Renderer capabilities (available after initialization) */
@@ -39,8 +40,11 @@ export function useRenderer(options: UseRendererOptions = {}): UseRendererResult
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const rendererRef = useRef<Renderer | null>(null);
     const initializingRef = useRef<boolean>(false);
-    const startTimeRef = useRef<number>(performance.now());
-    const lastFrameTimeRef = useRef<number>(performance.now());
+    // Seeded on first render() rather than here: calling performance.now() while
+    // rendering is an impure read, and the values are only meaningful once the
+    // first frame actually arrives.
+    const startTimeRef = useRef<number>(0);
+    const lastFrameTimeRef = useRef<number>(0);
     const lastSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
 
     const [isInitialized, setIsInitialized] = useState(false);
@@ -102,7 +106,9 @@ export function useRenderer(options: UseRendererOptions = {}): UseRendererResult
     }, [preferredBackend, autoAddLandmarkOverlay]);
 
     // Render function - handles lazy init and rendering
-    const render = useCallback((tracking: TrackingDTO | null, width: number, height: number) => {
+    const render = useCallback((tracking: TrackingDTO | null, geometry: ViewGeometry) => {
+        const width = geometry.viewWidth;
+        const height = geometry.viewHeight;
         if (width <= 0 || height <= 0) return;
 
         const renderer = rendererRef.current;
@@ -123,6 +129,10 @@ export function useRenderer(options: UseRendererOptions = {}): UseRendererResult
         }
 
         const now = performance.now();
+        if (startTimeRef.current === 0) {
+            startTimeRef.current = now;
+            lastFrameTimeRef.current = now;
+        }
         const deltaTime = now - lastFrameTimeRef.current;
         const elapsedTime = now - startTimeRef.current;
         lastFrameTimeRef.current = now;
@@ -131,6 +141,7 @@ export function useRenderer(options: UseRendererOptions = {}): UseRendererResult
             tracking,
             width,
             height,
+            geometry,
             deltaTime,
             elapsedTime,
         };

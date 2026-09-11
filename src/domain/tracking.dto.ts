@@ -6,9 +6,16 @@ export type NormalizedPoint = {
     z?: number;
 };
 
+export type BlendshapeCategory = {
+    categoryName: string;
+    score: number;
+};
+
 export type FaceLandmarksDTO = {
     faces: Array<{
         landmarks: NormalizedPoint[];
+        // F12 — MediaPipe FaceLandmarker blendshapes (~52 morph-target weights per face)
+        blendshapes?: BlendshapeCategory[];
     }>;
 };
 
@@ -16,6 +23,11 @@ export type HandLandmarksDTO = {
     hands: Array<{
         handedness?: "Left" | "Right" | "Unknown";
         landmarks: NormalizedPoint[];
+        // F13 — top gesture label from MediaPipe GestureRecognizer.
+        // One of: "None" | "Closed_Fist" | "Open_Palm" | "Pointing_Up" |
+        //         "Thumb_Down" | "Thumb_Up" | "Victory" | "ILoveYou"
+        gesture?: string;
+        gestureScore?: number;
     }>;
 };
 
@@ -60,6 +72,10 @@ export type PerformanceMetricsDTO = {
     // Power metrics
     batteryLevel?: number;
     batteryCharging?: boolean;
+    // Battery consumption over the session (start - end, positive = used)
+    batteryLevelStart?: number;
+    batteryLevelEnd?: number;
+    batteryDeltaPercent?: number;
 
     // Network metrics
     networkType?: string;
@@ -84,8 +100,32 @@ export type PerformanceMetricsDTO = {
 
     // Stability metrics
     peakMemoryUsageMB?: number;
+    // Memory consumption over the session (end - start, positive = grew)
+    memoryUsageStartMB?: number;
+    memoryUsageEndMB?: number;
+    memoryDeltaMB?: number;
     gpuDelegateActive?: boolean;
     trackingRecoveryTimeMs?: number;
     consecutiveTrackingLossMax?: number;
     errorCount?: number;
+
+    // ---- Run conditions ----
+    // NF4: what a row means depends on how the session was configured. Without
+    // these, two rows that differ only in capture resolution or threading model
+    // are indistinguishable, and the platform comparison silently mixes them.
+
+    // Capture resolution actually delivered by the camera, not the one requested.
+    frameWidth?: number;
+    frameHeight?: number;
+
+    // Which graphics backend drew the overlay.
+    // PWA: "webgpu" | "webgl2" | "webgl". Native: "skia".
+    renderBackend?: string;
+
+    // Where inference ran relative to the UI.
+    // PWA: "main" | "worker". Native: "async-runner".
+    inferenceThreading?: string;
+
+    // NF3 — milliseconds from tracking start to the first frame with a detection.
+    timeToFirstDetectionMs?: number;
 };

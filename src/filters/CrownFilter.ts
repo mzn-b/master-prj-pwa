@@ -68,13 +68,33 @@ export class CrownFilter {
   private readonly createdAt = performance.now()
   private initMs?: number
   private modelMs?: number
+  /** When the first drawable frame was attempted, relative to construction. */
+  private firstDrawAtMs?: number
+  /** How long that first render() call itself took. */
+  private firstDrawMs?: number
 
+  /**
+   * Reports progressively, rather than waiting for every phase.
+   *
+   * Measured on device: renderer 6 ms and model 185 ms on iOS against 945 ms on
+   * Android — yet iOS is the arm that shows the crown seconds late. So the cost
+   * is not initialisation, and the two draw figures below separate the
+   * remaining possibilities: a first draw that happens late (waiting on
+   * readiness or on a detected face) from a first draw that is itself slow
+   * (pipeline compilation on first use).
+   */
   private reportTiming(): void {
-    if (this.initMs === undefined || this.modelMs === undefined) return
-    this.onTiming?.(
-      `Krone bereit: Renderer ${Math.round(this.initMs)} ms, ` +
-        `Modell ${Math.round(this.modelMs)} ms`,
-    )
+    const parts: string[] = []
+    if (this.initMs !== undefined) parts.push(`Renderer ${Math.round(this.initMs)} ms`)
+    if (this.modelMs !== undefined) parts.push(`Modell ${Math.round(this.modelMs)} ms`)
+    if (this.firstDrawAtMs !== undefined) {
+      parts.push(`1. Frame bei ${Math.round(this.firstDrawAtMs)} ms`)
+    }
+    if (this.firstDrawMs !== undefined) {
+      parts.push(`Dauer ${Math.round(this.firstDrawMs)} ms`)
+    }
+    if (parts.length === 0) return
+    this.onTiming?.(`Krone: ${parts.join(', ')}`)
   }
 
   constructor(
@@ -275,7 +295,14 @@ export class CrownFilter {
     this.crown.rotation.set(pitch, yaw, roll)
     this.crown.scale.setScalar(scaleFactor)
 
+    const isFirstDraw = this.firstDrawMs === undefined
+    const drawStart = isFirstDraw ? performance.now() : 0
     this.renderer.render(this.scene, this.camera)
+    if (isFirstDraw) {
+      this.firstDrawAtMs = drawStart - this.createdAt
+      this.firstDrawMs = performance.now() - drawStart
+      this.reportTiming()
+    }
   }
 
   dispose(): void {

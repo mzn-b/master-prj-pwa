@@ -4,7 +4,7 @@
  * Uses O(1) circular buffers instead of O(n) array.shift()
  */
 
-import type { PerformanceMetricsDTO } from "../domain/tracking.dto";
+import type { PerformanceMetricsDTO, TrackingDTO } from "../domain/tracking.dto";
 
 /**
  * F11 — frames discarded before min/max fps start being recorded, so first-frame
@@ -15,7 +15,60 @@ import type { PerformanceMetricsDTO } from "../domain/tracking.dto";
 export const WARMUP_FRAMES = 30;
 const BUFFER_SIZE = 60;
 
+/** MediaPipe face-mesh nose tip — the landmark used as the jitter reference. */
+const NOSE_TIP_INDEX = 1;
+
+/** Rounding helpers — undefined passes through, so a missing metric stays missing. */
+const round1 = (v: number | undefined) => (v === undefined ? undefined : Math.round(v * 10) / 10);
+const round3 = (v: number | undefined) => (v === undefined ? undefined : Math.round(v * 1000) / 1000);
+const round5 = (v: number | undefined) => (v === undefined ? undefined : Math.round(v * 100000) / 100000);
+
 /** O(1) circular buffer for time series data */
+/**
+ * Every sample of one session, for percentiles.
+ *
+ * The CircularBuffer below is a 60-sample rolling window, which is right for the
+ * live HUD but wrong for a session summary: percentiles taken over it would
+ * describe the last few seconds, not the run. This keeps the whole session.
+ *
+ * Cost is negligible beside the ~520 point objects MediaPipe allocates per frame:
+ * a five-minute run at 30 fps is 9000 doubles, about 72 KB.
+ */
+class SampleSeries {
+    private samples: number[] = [];
+
+    push(value: number): void {
+        this.samples.push(value);
+    }
+
+    reset(): void {
+        this.samples = [];
+    }
+
+    get count(): number {
+        return this.samples.length;
+    }
+
+    get mean(): number | undefined {
+        if (this.samples.length === 0) return undefined;
+        let total = 0;
+        for (const v of this.samples) total += v;
+        return total / this.samples.length;
+    }
+
+    /**
+     * Nearest-rank percentile: the smallest sample at or above the given rank.
+     * No interpolation, so a reported p95 is a value that actually occurred.
+     * `p` is 0..1. Sorts a copy, since ordering the live array would corrupt it.
+     */
+    percentile(p: number): number | undefined {
+        if (this.samples.length === 0) return undefined;
+        const sorted = [...this.samples].sort((a, b) => a - b);
+        const rank = Math.ceil(p * sorted.length);
+        return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1];
+    }
+}
+
 class CircularBuffer {
     private buffer: Float64Array;
     private index = 0;
@@ -55,6 +108,33 @@ class CircularBuffer {
     }
 }
 
+
+/**
+ * Time from navigation start until the page became interactive.
+ *
+ * `domInteractive` is the closest web equivalent of "the app is usable": the
+ * document is parsed and scripts have run. It includes what makes a PWA's
+ * startup different from a native app's — fetching the shell over the network or
+ * out of the service-worker cache, booting the JavaScript engine, and evaluating
+ * the bundle — which is exactly the difference this study exists to measure and
+ * which `modelLoadTimeMs` (measured after the app is already running) hides.
+ *
+ * Not directly comparable with the native figure, which is measured from process
+ * start: the browser is already running before navigation begins. Treat it as
+ * "time to interactive within the app's own lifetime" on both sides, and say so.
+ */
+function readAppStartupMs(): number | undefined {
+    try {
+        const [nav] = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+        if (nav && nav.domInteractive > 0) {
+            return Math.round(nav.domInteractive * 10) / 10;
+        }
+    } catch {
+        // Not available in every context; a missing reading is a null column.
+    }
+    return undefined;
+}
+
 export class PerformanceTracker {
     private startTime = 0;
     private frameCount = 0;
@@ -63,6 +143,34 @@ export class PerformanceTracker {
     private lastFrameTime = 0;
     private warmupComplete = false;
     private lastTrackingValid = false;
+
+    // Session-wide series, for the percentiles submitted with the session.
+    private inferenceSeries = new SampleSeries();
+    private frameIntervalSeries = new SampleSeries();
+    private renderSeries = new SampleSeries();
+    // Detection quality, accumulated per frame.
+    private gestureConfidenceSum = 0;
+    private gestureConfidenceCount = 0;
+    private blendshapeActivationSum = 0;
+    private blendshapeActivationCount = 0;
+    // F15 governor behaviour, sampled per camera frame.
+    private frameSkipSum = 0;
+    private frameSkipCount = 0;
+    private frameSkipMax = 0;
+    private droppedFramesGovernor = 0;
+    private droppedFramesBusy = 0;
+    private landmarkDeltaSum = 0;
+    private landmarkDeltaCount = 0;
+    private lastNose?: { x: number; y: number };
+    /**
+     * NF3 — time from the app becoming interactive to this session starting.
+     *
+     * Taken from the navigation timeline, so it spans the browser's own startup:
+     * fetching the shell, booting the JS engine and hydrating React. The native
+     * app measures the equivalent from process start. This is where the PWA and
+     * native differ most and it was previously unmeasured.
+     */
+    private appStartupMs?: number;
 
     private frameTimes = new CircularBuffer(BUFFER_SIZE);
     private inferenceTimes = new CircularBuffer(BUFFER_SIZE);
@@ -104,6 +212,8 @@ export class PerformanceTracker {
         frameHeight?: number;
         renderBackend?: string;
         inferenceThreading?: string;
+        smoothingEnabled?: boolean;
+        dynamicInferenceEnabled?: boolean;
     } = {};
 
     // Cached hardware info (queried once at construction)
@@ -193,6 +303,22 @@ export class PerformanceTracker {
         this.batteryLevelStart = undefined;
         this.memoryUsageStartMB = undefined;
         this.errorCount = 0;
+        this.inferenceSeries.reset();
+        this.frameIntervalSeries.reset();
+        this.renderSeries.reset();
+        this.gestureConfidenceSum = 0;
+        this.gestureConfidenceCount = 0;
+        this.blendshapeActivationSum = 0;
+        this.blendshapeActivationCount = 0;
+        this.frameSkipSum = 0;
+        this.frameSkipCount = 0;
+        this.frameSkipMax = 0;
+        this.droppedFramesGovernor = 0;
+        this.droppedFramesBusy = 0;
+        this.landmarkDeltaSum = 0;
+        this.landmarkDeltaCount = 0;
+        this.lastNose = undefined;
+        this.appStartupMs = readAppStartupMs();
         this.trackingLostTime = 0;
         this.totalRecoveryTimeMs = 0;
         this.recoveryCount = 0;
@@ -247,6 +373,8 @@ export class PerformanceTracker {
         frameHeight?: number;
         renderBackend?: string;
         inferenceThreading?: string;
+        smoothingEnabled?: boolean;
+        dynamicInferenceEnabled?: boolean;
     }): void {
         this.runConditions = { ...this.runConditions, ...conditions };
     }
@@ -268,14 +396,105 @@ export class PerformanceTracker {
      * events (governor skip, and the async runner reporting itself busy) so the
      * column means the same thing on both platforms.
      */
-    recordDroppedFrame(count = 1): void {
+    /**
+     * A camera frame that reached the pipeline and produced no inference.
+     *
+     * The cause is required rather than defaulted: "the governor skipped it"
+     * and "the device could not keep up" are opposite findings, and a wrong
+     * default would silently attribute one to the other. `droppedFrames` stays
+     * the total, so the existing column keeps its meaning.
+     */
+    recordDroppedFrame(cause: "governor" | "busy", count = 1): void {
         this.droppedFrames += count;
+        if (cause === "governor") {
+            this.droppedFramesGovernor += count;
+        } else {
+            this.droppedFramesBusy += count;
+        }
+    }
+
+    /**
+     * F15 — the divider in force for this camera frame. Called once per camera
+     * frame including skipped ones, so the mean is time-weighted rather than
+     * weighted by completed inferences.
+     */
+    recordFrameSkip(skip: number): void {
+        if (!Number.isFinite(skip) || skip < 1) return;
+        this.frameSkipSum += skip;
+        this.frameSkipCount++;
+        if (skip > this.frameSkipMax) this.frameSkipMax = skip;
     }
 
     recordDetection(facesCount: number, handsCount: number): void {
         this.totalFacesDetected += facesCount;
         this.totalHandsDetected += handsCount;
         this.detectionFrameCount++;
+    }
+
+
+    /**
+     * F4/F11 — time spent drawing one frame.
+     *
+     * Kept separate from inference because the two platforms draw with different
+     * engines (Skia on native, WebGPU/WebGL here) and the cost was previously
+     * invisible: frameProcessingTimeMs brackets the detect call, so every
+     * comparison silently attributed the whole frame to inference.
+     */
+    recordRenderMs(durationMs: number): void {
+        this.renderSeries.push(durationMs);
+    }
+
+    /**
+     * Detection quality, from what MediaPipe itself reports.
+     *
+     * Called once per completed inference with the DTO that was produced. Every
+     * other metric here measures speed; the iOS orientation defect degraded
+     * accuracy for weeks while all of them looked healthy.
+     */
+    recordDetectionQuality(dto: TrackingDTO | null): void {
+        if (!dto) return;
+
+        // MediaPipe's own confidence in the gesture it classified.
+        for (const hand of dto.hand?.hands ?? []) {
+            if (typeof hand.gestureScore === "number") {
+                this.gestureConfidenceSum += hand.gestureScore;
+                this.gestureConfidenceCount++;
+            }
+        }
+
+        const face = dto.face?.faces[0];
+        if (face) {
+            // The strongest-firing blendshape: a proxy for how decisively the
+            // face model is responding rather than emitting a neutral mask.
+            const shapes = face.blendshapes;
+            if (shapes && shapes.length > 0) {
+                let top = 0;
+                for (const shape of shapes) {
+                    if (shape.score > top) top = shape.score;
+                }
+                this.blendshapeActivationSum += top;
+                this.blendshapeActivationCount++;
+            }
+
+            // Jitter: frame-to-frame movement of the nose tip while tracking
+            // holds. Normalized units, so it is resolution-independent and
+            // comparable across arms. Low is stable.
+            const nose = face.landmarks[NOSE_TIP_INDEX];
+            if (nose) {
+                if (this.lastNose) {
+                    const dx = nose.x - this.lastNose.x;
+                    const dy = nose.y - this.lastNose.y;
+                    this.landmarkDeltaSum += Math.hypot(dx, dy);
+                    this.landmarkDeltaCount++;
+                }
+                this.lastNose = { x: nose.x, y: nose.y };
+            } else {
+                this.lastNose = undefined;
+            }
+        } else {
+            // Tracking lost: the next delta would measure re-acquisition, not jitter.
+            this.lastNose = undefined;
+        }
     }
 
     recordFrameStart(): number {
@@ -289,7 +508,9 @@ export class PerformanceTracker {
      * so the two numbers describe the same work.
      */
     recordInferenceTime(startTime: number): void {
-        this.inferenceTimes.push(performance.now() - startTime);
+        const duration = performance.now() - startTime;
+        this.inferenceTimes.push(duration);
+        this.inferenceSeries.push(duration);
     }
 
     /**
@@ -300,6 +521,7 @@ export class PerformanceTracker {
      */
     recordInferenceMs(durationMs: number): void {
         this.inferenceTimes.push(durationMs);
+        this.inferenceSeries.push(durationMs);
     }
 
     recordFrameEnd(frameStart: number, hasTracking: boolean): void {
@@ -317,6 +539,7 @@ export class PerformanceTracker {
 
         if (frameTime > 0) {
             this.frameTimes.push(frameTime);
+            this.frameIntervalSeries.push(frameTime);
 
             if (this.warmupComplete) {
                 const fps = 1000 / frameTime;
@@ -474,8 +697,44 @@ export class PerformanceTracker {
             frameHeight: this.runConditions.frameHeight,
             renderBackend: this.runConditions.renderBackend,
             inferenceThreading: this.runConditions.inferenceThreading,
+            smoothingEnabled: this.runConditions.smoothingEnabled,
+            dynamicInferenceEnabled: this.runConditions.dynamicInferenceEnabled,
             timeToFirstDetectionMs: this.firstDetectionAt !== undefined
                 ? Math.round((this.firstDetectionAt - this.startTime) * 10) / 10
+                : undefined,
+
+            // Distribution over the whole session, not the rolling window.
+            inferenceTimeP50Ms: round1(this.inferenceSeries.percentile(0.5)),
+            inferenceTimeP95Ms: round1(this.inferenceSeries.percentile(0.95)),
+            inferenceTimeP99Ms: round1(this.inferenceSeries.percentile(0.99)),
+            frameIntervalP50Ms: round1(this.frameIntervalSeries.percentile(0.5)),
+            frameIntervalP95Ms: round1(this.frameIntervalSeries.percentile(0.95)),
+            frameIntervalP99Ms: round1(this.frameIntervalSeries.percentile(0.99)),
+
+            // PWA-only, and not by omission on the other side: native renders
+            // declaratively through Skia with no equivalent point to time, so
+            // this answers "what share of a web frame is drawing" rather than
+            // "which platform draws faster". See METRICS.md.
+            avgRenderTimeMs: round1(this.renderSeries.mean),
+            renderTimeP95Ms: round1(this.renderSeries.percentile(0.95)),
+
+            appStartupMs: this.appStartupMs,
+
+            avgFrameSkip: this.frameSkipCount > 0
+                ? Math.round((this.frameSkipSum / this.frameSkipCount) * 100) / 100
+                : undefined,
+            maxFrameSkip: this.frameSkipCount > 0 ? this.frameSkipMax : undefined,
+            droppedFramesGovernor: this.droppedFramesGovernor,
+            droppedFramesBusy: this.droppedFramesBusy,
+
+            avgGestureConfidence: this.gestureConfidenceCount > 0
+                ? round3(this.gestureConfidenceSum / this.gestureConfidenceCount)
+                : undefined,
+            avgBlendshapeActivation: this.blendshapeActivationCount > 0
+                ? round3(this.blendshapeActivationSum / this.blendshapeActivationCount)
+                : undefined,
+            landmarkStability: this.landmarkDeltaCount > 0
+                ? round5(this.landmarkDeltaSum / this.landmarkDeltaCount)
                 : undefined,
         };
     }

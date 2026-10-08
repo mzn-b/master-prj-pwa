@@ -43,7 +43,13 @@ export function Switch({ checked, disabled = false, onChange, label }: SwitchPro
                 aria-label={label}
                 checked={checked}
                 disabled={disabled}
-                onChange={e => onChange(e.target.checked)}
+                // The `disabled` attribute already stops real interaction; the
+                // explicit guard makes the contract the component's own rather
+                // than the browser's, and holds for programmatic events too.
+                onChange={e => {
+                    if (disabled) return;
+                    onChange(e.target.checked);
+                }}
                 style={{
                     position: "absolute",
                     inset: 0,

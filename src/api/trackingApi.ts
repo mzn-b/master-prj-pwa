@@ -1,4 +1,5 @@
 import type { PerformanceMetricsDTO, TrackingMode } from "../domain/tracking.dto";
+import {APP_VERSION} from "../config/buildInfo";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
@@ -94,7 +95,9 @@ function getDeviceInfo(): DeviceInfo {
     return {
         deviceModel,
         osVersion,
-        appVersion: "1.0.0",
+        // Stamped at build time so a session can be traced back to the code
+        // that produced it — see src/config/buildInfo.ts.
+        appVersion: APP_VERSION,
         screenWidth: window.screen.width,
         screenHeight: window.screen.height,
         browserInfo: userAgent,

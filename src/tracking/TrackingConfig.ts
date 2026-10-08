@@ -22,7 +22,10 @@ export async function checkDeviceCapabilities(): Promise<DeviceCapabilities> {
     };
 
 
-    capabilities.isSecureContext = window.isSecureContext;
+    // `?? false`: the property is absent in some embedded webviews and in
+    // jsdom, and an undefined here would flow into a field the DeviceCapabilities
+    // interface declares as boolean.
+    capabilities.isSecureContext = window.isSecureContext ?? false;
     if (!capabilities.isSecureContext && window.location.hostname !== "localhost") {
         capabilities.errors.push("HTTPS ist erforderlich für Kamerazugriff.");
     }

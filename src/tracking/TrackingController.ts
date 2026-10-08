@@ -99,6 +99,9 @@ export class TrackingController {
     private face?: FaceLandmarker;
     private hand?: GestureRecognizer;
     private lastTimestamp = -1;
+    /** Raw detector output counts for the last detect(), before NF7 grace. */
+    rawFaceCount = 0;
+    rawHandCount = 0;
 
     // NF7 — cached last successful results, per modality
     private lastFaceResult?: FaceLandmarksDTO;
@@ -220,6 +223,15 @@ export class TrackingController {
         this.lastTimestamp = timestampMs;
 
         const dto: TrackingDTO = { timestampMs, mode };
+        // What the detector actually returned this frame, before the NF7 grace
+        // below may substitute a held result. The returned DTO cannot express
+        // this — a graced frame is indistinguishable from a detected one, which
+        // is the point of the grace for rendering and exactly wrong for
+        // metrics. The native app counts from raw detector output because its
+        // grace runs downstream on the UI runtime; the PWA must expose the same
+        // quantity or the two arms measure different things. See METRICS.md.
+        this.rawFaceCount = 0;
+        this.rawHandCount = 0;
 
         if ((mode === "face" || mode === "combined") && this.face) {
             const res: FaceLandmarkerResult = this.face.detectForVideo(video, timestampMs);
@@ -232,6 +244,7 @@ export class TrackingController {
                     score: c.score,
                 })),
             }));
+            this.rawFaceCount = faces.length;
             if (faces.length > 0) {
                 dto.face = { faces };
                 this.lastFaceResult = dto.face;
@@ -261,6 +274,7 @@ export class TrackingController {
                     gestureScore: topGesture?.score,
                 };
             });
+            this.rawHandCount = hands.length;
             if (hands.length > 0) {
                 dto.hand = { hands };
                 this.lastHandResult = dto.hand;

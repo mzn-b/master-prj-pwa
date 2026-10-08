@@ -243,7 +243,7 @@ export function CameraScreen() {
              * happen exactly once per inference lives here rather than in the
              * frame loop, so both threading modes account identically.
              */
-            const onResult = ({ dto, inferenceMs }: EngineResult) => {
+            const onResult = ({ dto, inferenceMs, rawFaceCount, rawHandCount }: EngineResult) => {
                 const pt = performanceTrackerRef.current;
                 const sm = smootherRef.current;
                 if (!pt) return;
@@ -253,12 +253,26 @@ export function CameraScreen() {
                 latestSmoothedRef.current = smoothed;
                 latestTrackingRef.current = smoothed;
 
-                const facesCount = smoothed.face?.faces?.length ?? 0;
-                const handsCount = smoothed.hand?.hands?.length ?? 0;
-                pt.recordDetection(facesCount, handsCount);
+                // Counted from the RAW detector output, not from `smoothed`.
+                // The NF7 grace inside TrackingController.detect() reuses the
+                // last good result for up to 150 ms, so a graced frame looks
+                // like a detection in the DTO. Counting that would have made
+                // the PWA report fewer tracking losses and a higher detection
+                // rate than native, which counts pre-grace in the worklet —
+                // and the bias is arm-dependent, since a 150 ms window covers
+                // ~2 frames at 12 fps but ~7 at 45 fps. See METRICS.md.
+                const detected = rawFaceCount > 0 || rawHandCount > 0;
+                pt.recordDetection(rawFaceCount, rawHandCount);
+                // Quality only on frames the detector actually produced. A
+                // graced frame reuses the previous coordinates verbatim, so its
+                // landmark displacement is exactly zero — it would read as
+                // perfect stability while the face was in fact lost.
+                if (detected) {
+                    pt.recordDetectionQuality(smoothed);
+                }
                 // Frame processing = inference plus the smoothing just done, so
                 // back-date the start by the inference we were handed.
-                pt.recordFrameEnd(performance.now() - inferenceMs, facesCount > 0 || handsCount > 0);
+                pt.recordFrameEnd(performance.now() - inferenceMs, detected);
             };
 
             const engine = await createEngine(threading, {
@@ -281,6 +295,10 @@ export function CameraScreen() {
                 renderBackend: capabilitiesRef.current?.backend,
                 frameWidth: video.videoWidth || undefined,
                 frameHeight: video.videoHeight || undefined,
+                // F9/F15 — both move the numbers, so both are submitted with
+                // them. Captured at start: the switches are disabled mid-run.
+                smoothingEnabled,
+                dynamicInferenceEnabled,
             });
             perfTracker.start();
 
@@ -348,12 +366,15 @@ export function CameraScreen() {
                 frameCountRef.current++;
 
                 const frameSkip = di?.getCurrentFrameSkip() ?? 1;
+                // F15 — sampled here, before the skip check, so every camera
+                // frame contributes and the mean is time-weighted.
+                pt?.recordFrameSkip(frameSkip);
                 if (frameCountRef.current % frameSkip !== 0) {
                     // F15 governor deliberately skipped this frame. It reached the
                     // pipeline and produced no inference, which is what the
                     // droppedFrames column measures — the native app counts the
                     // same event.
-                    pt?.recordDroppedFrame();
+                    pt?.recordDroppedFrame("governor");
                     return;
                 }
 
@@ -363,7 +384,7 @@ export function CameraScreen() {
                     // than queued. Skipped: the timestamp had not advanced, so
                     // MediaPipe ran nothing. Both are dropped frames, and the
                     // native app counts the same two events.
-                    pt?.recordDroppedFrame();
+                    pt?.recordDroppedFrame("busy");
                 }
                 // "done" and "scheduled" are accounted for by onResult.
             };
@@ -386,11 +407,17 @@ export function CameraScreen() {
                     const geometry = viewGeometryFromVideo(v, width, height);
                     const dto = latestSmoothedRef.current;
 
+                    // F4/F11 — the draw stack was previously unmeasured, so the
+                    // whole frame was attributed to inference. Brackets the
+                    // overlay or filter draw, not the browser's compositing,
+                    // which is not observable from here.
+                    const drawStart = performance.now();
                     if (appModeRef.current === 'landmarks') {
                         renderOverlay(dto, geometry);
                     } else {
                         filterOverlayRef.current?.tick(dto, geometry);
                     }
+                    performanceTrackerRef.current?.recordRenderMs(performance.now() - drawStart);
                 }
                 rafRef.current = requestAnimationFrame(drawLoop);
             };

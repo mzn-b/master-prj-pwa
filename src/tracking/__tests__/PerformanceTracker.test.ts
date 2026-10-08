@@ -161,8 +161,8 @@ describe("PerformanceTracker dropped frames", () => {
         const t = new PerformanceTracker();
         t.start();
         runFrames(t, 5, 33);
-        t.recordDroppedFrame();
-        t.recordDroppedFrame();
+        t.recordDroppedFrame("busy");
+        t.recordDroppedFrame("busy");
         const m = t.getMetrics();
         expect(m.frameCount).toBe(5);
         expect(m.droppedFrames).toBe(2);
@@ -171,14 +171,14 @@ describe("PerformanceTracker dropped frames", () => {
     it("accepts a batch count", () => {
         const t = new PerformanceTracker();
         t.start();
-        t.recordDroppedFrame(7);
+        t.recordDroppedFrame("busy", 7);
         expect(t.getMetrics().droppedFrames).toBe(7);
     });
 
     it("clears the counter on reset", () => {
         const t = new PerformanceTracker();
         t.start();
-        t.recordDroppedFrame(3);
+        t.recordDroppedFrame("busy", 3);
         t.reset();
         expect(t.getMetrics().droppedFrames).toBe(0);
     });
@@ -233,5 +233,208 @@ describe("PerformanceTracker battery units", () => {
         const m = t.getMetrics();
         expect(m.batteryLevel).toBeUndefined();
         expect(m.batteryDeltaPercent).toBeUndefined();
+    });
+});
+
+/**
+ * The metrics added on 2026-09-15. Rationale for each — and for the ones that
+ * are deliberately one-sided — is in METRICS.md.
+ */
+describe("PerformanceTracker percentiles", () => {
+    let t: PerformanceTracker;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        t = new PerformanceTracker();
+        t.start();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("reports a value that actually occurred, not an interpolation", () => {
+        // Nearest rank on ten samples of 10..100 ms: p95 must be 100, not 95.
+        for (let i = 1; i <= 10; i++) t.recordInferenceMs(i * 10);
+        const m = t.getMetrics();
+        expect(m.inferenceTimeP95Ms).toBeCloseTo(100, 1);
+        expect(m.inferenceTimeP50Ms).toBeCloseTo(50, 1);
+    });
+
+    it("keeps the whole session, not just the rolling buffer", () => {
+        // Slow frames early on must still show in the p99 after hundreds of
+        // fast frames have pushed them out of the circular buffer — otherwise
+        // the percentile describes the buffer rather than the run.
+        for (let i = 0; i < 5; i++) t.recordInferenceMs(800);
+        for (let i = 0; i < 300; i++) t.recordInferenceMs(10);
+        expect(t.getMetrics().inferenceTimeP99Ms!).toBeGreaterThan(100);
+        expect(t.getMetrics().inferenceTimeP50Ms!).toBeLessThan(20);
+    });
+
+    it("distinguishes judder from a slow average", () => {
+        // Alternating 5 ms and 60 ms frames: the interval p95 exposes the
+        // stutter that avgFps averages away.
+        for (let i = 0; i < 40; i++) {
+            const start = t.recordFrameStart();
+            vi.advanceTimersByTime(i % 2 === 0 ? 5 : 60);
+            t.recordFrameEnd(start, true);
+        }
+        const m = t.getMetrics();
+        expect(m.frameIntervalP95Ms!).toBeGreaterThan(m.frameIntervalP50Ms!);
+    });
+
+    it("omits percentiles rather than reporting zero for an empty session", () => {
+        const m = t.getMetrics();
+        expect(m.inferenceTimeP50Ms).toBeUndefined();
+        expect(m.frameIntervalP95Ms).toBeUndefined();
+    });
+});
+
+describe("PerformanceTracker detection quality", () => {
+    let t: PerformanceTracker;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        t = new PerformanceTracker();
+        t.start();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    function face(noseX: number, noseY: number, topBlendshape?: number) {
+        const landmarks = Array.from({ length: 5 }, () => ({ x: 0, y: 0, z: 0 }));
+        landmarks[1] = { x: noseX, y: noseY, z: 0 };
+        return {
+            timestampMs: 1,
+            mode: "face" as const,
+            face: {
+                faces: [
+                    {
+                        landmarks,
+                        blendshapes:
+                            topBlendshape === undefined
+                                ? undefined
+                                : [
+                                      { categoryName: "a", score: 0.1 },
+                                      { categoryName: "b", score: topBlendshape },
+                                  ],
+                    },
+                ],
+            },
+        };
+    }
+
+    it("averages MediaPipe's own gesture confidence", () => {
+        for (const score of [0.9, 0.7]) {
+            t.recordDetectionQuality({
+                timestampMs: 1,
+                mode: "hand",
+                hand: {
+                    hands: [{ landmarks: [], handedness: "Right", gesture: "Open_Palm", gestureScore: score }],
+                },
+            });
+        }
+        expect(t.getMetrics().avgGestureConfidence).toBeCloseTo(0.8, 3);
+    });
+
+    it("takes the strongest blendshape, not the mean of all of them", () => {
+        // Averaging 52 mostly-idle coefficients would report near zero however
+        // decisively the model responded.
+        t.recordDetectionQuality(face(0.5, 0.5, 0.6));
+        expect(t.getMetrics().avgBlendshapeActivation).toBeCloseTo(0.6, 3);
+    });
+
+    it("measures jitter as frame-to-frame nose displacement", () => {
+        t.recordDetectionQuality(face(0.5, 0.5));
+        t.recordDetectionQuality(face(0.53, 0.54)); // hypot(0.03, 0.04) = 0.05
+        expect(t.getMetrics().landmarkStability).toBeCloseTo(0.05, 3);
+    });
+
+    it("does not count the jump across a tracking dropout as jitter", () => {
+        // Losing the face and reacquiring it elsewhere is not instability; if
+        // the gap were counted, every dropout would inflate the figure.
+        t.recordDetectionQuality(face(0.1, 0.1));
+        t.recordDetectionQuality({ timestampMs: 2, mode: "face", face: { faces: [] } });
+        t.recordDetectionQuality(face(0.9, 0.9));
+        expect(t.getMetrics().landmarkStability).toBeUndefined();
+    });
+
+    it("reports nothing rather than zero when no face was ever seen", () => {
+        t.recordDetectionQuality({ timestampMs: 1, mode: "face", face: { faces: [] } });
+        const m = t.getMetrics();
+        expect(m.landmarkStability).toBeUndefined();
+        expect(m.avgBlendshapeActivation).toBeUndefined();
+        expect(m.avgGestureConfidence).toBeUndefined();
+    });
+
+    it("ignores a null frame", () => {
+        t.recordDetectionQuality(null);
+        expect(t.getMetrics().landmarkStability).toBeUndefined();
+    });
+});
+
+describe("PerformanceTracker render time", () => {
+    let t: PerformanceTracker;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        t = new PerformanceTracker();
+        t.start();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("summarises draw cost separately from inference", () => {
+        // PWA-only by measurement structure: the native app has no equivalent
+        // point to time. See METRICS.md §5.
+        for (const ms of [4, 6, 8, 40]) t.recordRenderMs(ms);
+        const m = t.getMetrics();
+        expect(m.avgRenderTimeMs).toBeCloseTo(14.5, 1);
+        expect(m.renderTimeP95Ms).toBeCloseTo(40, 1);
+    });
+
+    it("is absent, not zero, when nothing was drawn", () => {
+        expect(t.getMetrics().avgRenderTimeMs).toBeUndefined();
+    });
+});
+
+
+describe("PerformanceTracker F15 governor accounting", () => {
+    let t: PerformanceTracker;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        t = new PerformanceTracker();
+        t.start();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("splits dropped frames by cause while keeping the total", () => {
+        // At skip 5 the governor discards 80% of frames by design. Without the
+        // split that reads as catastrophic failure in the droppedFrames column.
+        t.recordDroppedFrame("governor", 40);
+        t.recordDroppedFrame("busy", 3);
+        const m = t.getMetrics();
+        expect(m.droppedFrames).toBe(43);
+        expect(m.droppedFramesGovernor).toBe(40);
+        expect(m.droppedFramesBusy).toBe(3);
+    });
+
+    it("reports the mean and peak divider, weighted by camera frames", () => {
+        // Sampled on every camera frame including skipped ones, so an arm that
+        // spent most of the session at a high divider reads as such.
+        for (let i = 0; i < 10; i++) t.recordFrameSkip(1);
+        for (let i = 0; i < 10; i++) t.recordFrameSkip(3);
+        const m = t.getMetrics();
+        expect(m.avgFrameSkip).toBeCloseTo(2, 2);
+        expect(m.maxFrameSkip).toBe(3);
+    });
+
+    it("rejects a nonsensical divider rather than skewing the mean", () => {
+        t.recordFrameSkip(2);
+        t.recordFrameSkip(0);
+        t.recordFrameSkip(Number.NaN);
+        expect(t.getMetrics().avgFrameSkip).toBeCloseTo(2, 2);
+    });
+
+    it("is absent, not 1, when the session recorded no frames", () => {
+        const m = t.getMetrics();
+        expect(m.avgFrameSkip).toBeUndefined();
+        expect(m.maxFrameSkip).toBeUndefined();
     });
 });

@@ -31,6 +31,15 @@ export interface EngineResult {
     dto: TrackingDTO;
     /** End-to-end: frame available to landmarks ready. See NF4 in the audit. */
     inferenceMs: number;
+    /**
+     * What the detector returned this frame, before the NF7 grace may have
+     * substituted a held result. Carried separately from `dto` because a graced
+     * frame is deliberately indistinguishable from a detected one in the DTO —
+     * right for drawing, wrong for counting. Native counts from raw detector
+     * output, so the PWA must too. See METRICS.md.
+     */
+    rawFaceCount: number;
+    rawHandCount: number;
 }
 
 export interface TrackingEngine {
@@ -88,7 +97,12 @@ class MainThreadEngine implements TrackingEngine {
         if (dto === null) return { status: "skipped" };
 
         this.lastDto = dto;
-        this.options.onResult({ dto, inferenceMs: performance.now() - startedAt });
+        this.options.onResult({
+            dto,
+            inferenceMs: performance.now() - startedAt,
+            rawFaceCount: this.controller.rawFaceCount,
+            rawHandCount: this.controller.rawHandCount,
+        });
         return { status: "done" };
     }
 
@@ -148,6 +162,8 @@ class WorkerEngine implements TrackingEngine {
             this.options.onResult({
                 dto: message.dto,
                 inferenceMs: performance.now() - this.startedAt,
+                rawFaceCount: message.rawFaceCount,
+                rawHandCount: message.rawHandCount,
             });
         };
     }

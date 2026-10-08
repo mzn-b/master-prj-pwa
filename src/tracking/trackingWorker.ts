@@ -29,7 +29,14 @@ export type WorkerRequest =
 export type WorkerResponse =
     | { type: "ready"; modelLoadTimeMs: number; gpuDelegateUsed: boolean }
     | { type: "error"; message: string }
-    | { type: "result"; seq: number; dto: TrackingDTO | null };
+    | {
+          type: "result";
+          seq: number;
+          dto: TrackingDTO | null;
+          /** Pre-grace detector output; see EngineResult in engines.ts. */
+          rawFaceCount: number;
+          rawHandCount: number;
+      };
 
 let controller: TrackingController | undefined;
 
@@ -67,7 +74,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         // close it — an ImageBitmap holds GPU memory until it is released.
         try {
             const dto = controller?.detect(message.bitmap, message.timestampMs, message.mode) ?? null;
-            const response: WorkerResponse = { type: "result", seq: message.seq, dto };
+            const response: WorkerResponse = {
+                type: "result",
+                seq: message.seq,
+                dto,
+                // Two integers, so the metric fix costs nothing on the wire —
+                // the alternative, shipping a second raw DTO, would have
+                // inflated the very inferenceMs this path measures.
+                rawFaceCount: controller?.rawFaceCount ?? 0,
+                rawHandCount: controller?.rawHandCount ?? 0,
+            };
             self.postMessage(response);
         } catch (e) {
             const error: WorkerResponse = {

@@ -1,9 +1,36 @@
+import {execSync} from "node:child_process";
 import {defineConfig} from "vite";
 import react from "@vitejs/plugin-react";
 import {VitePWA} from "vite-plugin-pwa";
 import basicSsl from '@vitejs/plugin-basic-ssl'
 
+/**
+ * Build identifier, baked in at build time.
+ *
+ * `appVersion` used to be the hard-coded string "1.0.0", so every session looked
+ * like it came from the same build. Several behaviour-changing fixes can land in
+ * a day, and without a stamp the sessions from before and after are
+ * indistinguishable in the database. A dirty tree is marked, because a build
+ * that matches no commit is the case worth spotting.
+ */
+function buildVersion(): string {
+    const git = (args: string) => {
+        try {
+            return execSync(`git ${args}`, {stdio: ["ignore", "pipe", "ignore"]}).toString().trim();
+        } catch {
+            return "";
+        }
+    };
+    const sha = git("rev-parse --short HEAD") || "nogit";
+    const dirty = git("status --porcelain") ? "-dirty" : "";
+    return `${process.env.npm_package_version ?? "0.0.0"}+${sha}${dirty}`;
+}
+
 export default defineConfig({
+    define: {
+        __APP_VERSION__: JSON.stringify(buildVersion()),
+        __BUILT_AT__: JSON.stringify(new Date().toISOString()),
+    },
     experimental: {
         /**
          * Bundle in dev too, so the dev server emits the same self-contained
@@ -62,7 +89,9 @@ export default defineConfig({
 
                 // ✅ unsere MediaPipe Assets aus public/
                 "mediapipe/models/*.task",
-                "mediapipe/wasm/*",
+                // Only the SIMD build — see globIgnores below.
+                "mediapipe/wasm/vision_wasm_internal.js",
+                "mediapipe/wasm/vision_wasm_internal.wasm",
 
                 // ✅ AR Filter Assets
                 "filters/*",
@@ -74,6 +103,19 @@ export default defineConfig({
                 maximumFileSizeToCacheInBytes: 20 * 1024 * 1024, // 20MB
 
                 globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,task,wasm,glb}"],
+
+                /**
+                 * Keep the non-SIMD WASM build out of the precache.
+                 *
+                 * MediaPipe ships two builds and picks one at runtime. Every
+                 * device this study targets supports SIMD, so precaching the
+                 * nosimd pair downloaded ~11 MB that is never executed — on a
+                 * ~38 MB first load, which a survey participant pays before the
+                 * app is usable. The files still ship, and the CacheFirst rule
+                 * for /mediapipe/ below picks them up on demand if some device
+                 * really does lack SIMD.
+                 */
+                globIgnores: ["**/vision_wasm_nosimd_internal.*"],
 
                 // Sicherheit: falls irgendwas nicht im precache landet, runtime cache fallback
                 runtimeCaching: [

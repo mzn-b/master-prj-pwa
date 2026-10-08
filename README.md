@@ -87,7 +87,7 @@ a laptop is fine for development; it just will not pollute the dataset.
 
 ## PWA install
 
-The app is installable as a PWA (manifest + service worker via `vite-plugin-pwa`). When served over HTTPS with a valid certificate, browsers will offer an "Install" prompt. Service-worker precaches the MediaPipe WASM and `.task` model files so the app can run offline after first load.
+The app is installable as a PWA (manifest + service worker via `vite-plugin-pwa`). When served over HTTPS with a valid certificate, browsers will offer an "Install" prompt. The service worker precaches the `.task` models and the **SIMD** MediaPipe WASM build so the app runs offline after first load — roughly 26 MB. The non-SIMD build ships but is deliberately excluded from the precache (`globIgnores`): every target device supports SIMD, so precaching it downloaded ~11 MB that is never executed. It is still fetched on demand by the runtime CacheFirst rule if some device needs it.
 
 ## Running comparison benchmarks
 
@@ -98,3 +98,25 @@ The app is installable as a PWA (manifest + service worker via `vite-plugin-pwa`
 4. Pick a tracking mode (face / hand / combined), enable any filters, press **Start**.
 5. After ~60 s, press **Stop** — metrics submit automatically.
 6. Inspect rows in PostgreSQL: `SELECT * FROM tracking_sessions ORDER BY recorded_at DESC LIMIT 5;`
+
+## Inference threading
+
+MediaPipe runs either on the main thread or in a Web Worker, selected at runtime
+in Settings and recorded with every session as `inferenceThreading`. The default
+is **main**: measured on device, the worker is slower for this workload because
+the per-frame `createImageBitmap` and transfer cost more than moving inference
+off-thread saves.
+
+The worker is a *classic* worker, not a module worker — MediaPipe's WASM loader
+calls `importScripts()`. `vite.config.ts` therefore sets `worker.format: "iife"`
+for builds and `experimental.bundledDev: true` so the dev server emits the same
+bundle (a plain dev server serves the worker as an ES module and it dies at
+load).
+
+## Participant consent
+
+`src/ui/ConsentGate.tsx` gates the whole app until consent is given, so the
+camera cannot be reached without it. The notice text lives in
+`src/ui/consentText.ts` and is **byte-identical to the native app's copy**, which
+a test asserts. Consent is deliberately not persisted: study sessions are
+supervised individually on a shared device, so every launch asks again.

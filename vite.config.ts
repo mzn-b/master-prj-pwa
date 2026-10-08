@@ -21,9 +21,24 @@ function buildVersion(): string {
             return "";
         }
     };
+    const version = process.env.npm_package_version ?? "0.0.0";
+
+    // On Vercel the checkout *is* a commit, so the platform's own sha is
+    // authoritative and no dirty check applies. Asking git here produced a
+    // false "-dirty" on every single deployment: Vercel creates `.vercel/`
+    // during the build, which was untracked, so `status --porcelain` was never
+    // empty. The deployed bundle therefore disclaimed its own provenance while
+    // being an exact build of a clean commit — and by the rule in TODO.md that
+    // would have disqualified every PWA session in the study.
+    if (process.env.VERCEL && process.env.VERCEL_GIT_COMMIT_SHA) {
+        return `${version}+${process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7)}`;
+    }
+
     const sha = git("rev-parse --short HEAD") || "nogit";
+    // Locally the check stays strict — including untracked files, since a stray
+    // source file genuinely can change the build.
     const dirty = git("status --porcelain") ? "-dirty" : "";
-    return `${process.env.npm_package_version ?? "0.0.0"}+${sha}${dirty}`;
+    return `${version}+${sha}${dirty}`;
 }
 
 export default defineConfig({

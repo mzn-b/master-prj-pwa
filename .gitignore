@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vercel build output. Left untracked it made the build stamp report
+# "-dirty" for every deployment — see buildVersion() in vite.config.ts.
+.vercel

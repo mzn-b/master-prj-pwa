@@ -40,6 +40,32 @@ describe("crown parity with the native filter", () => {
         expect(pwaCrown).toMatch(/pivot\.add\(model\)/);
     });
 
+    /**
+     * Size and lift, pinned numerically against the native source.
+     *
+     * The earlier assertions in this file passed throughout while the PWA crown
+     * was drawn at 0.60x the face width and native at 1.12x — a 1.87x
+     * difference, visible to any participant, on the one filter whose whole
+     * purpose is to be compared across the two implementations. They checked
+     * the clipping normal, the normalisation and the pivot, and simply never
+     * looked at the scale.
+     *
+     * Both apps normalise the model to a unit box, so these multipliers are
+     * directly comparable: the drawn width is the multiplier times the
+     * temple-to-temple distance, and the lift is a fraction of that width.
+     */
+    it.skipIf(!fs.existsSync(nativeCrown))(
+        "draws the crown at the same size as native, relative to the face",
+        () => {
+            const native = fs.readFileSync(nativeCrown, "utf8");
+            const num = (src: string, name: string) =>
+                Number(src.match(new RegExp(`${name}\\s*=\\s*([0-9.]+)`))?.[1]);
+
+            expect(num(pwaCrown, "CROWN_WIDTH_RATIO")).toBe(num(native, "CROWN_WIDTH_RATIO"));
+            expect(num(pwaCrown, "LIFT")).toBe(num(native, "LIFT"));
+        },
+    );
+
     it.skipIf(!fs.existsSync(nativeCrown))(
         "uses the same clipping normal as the native implementation",
         () => {

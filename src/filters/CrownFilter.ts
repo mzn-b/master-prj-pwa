@@ -10,6 +10,20 @@ import { projectNormalized, type ViewGeometry } from '../render/coordinates'
 import type { TrackingDTO } from '../domain/tracking.dto'
 
 const FOREHEAD_TOP = 10
+/**
+ * Crown width as a multiple of the temple-to-temple distance, and the lift
+ * above the forehead as a fraction of that width.
+ *
+ * These mirror the native implementation's constants of the same names, and
+ * crownParity.test.ts pins them to it. They were previously expressed as
+ * `(faceWidthPx / 2) * 1.2` and `0.34 * scaleFactor`, which works out at 0.60x
+ * the face width against native's 1.12x — the PWA crown was drawn at a little
+ * over half the size for the one filter whose purpose is cross-platform
+ * comparison, and the parity test did not look at size at all.
+ */
+const CROWN_WIDTH_RATIO = 1.12
+const LIFT = 0.15
+
 const FACE_LEFT = 234
 const FACE_RIGHT = 454
 const LEFT_EYE_OUTER = 33
@@ -29,7 +43,18 @@ export class CrownFilter {
   private ready = false
   private pendingSize: { width: number; height: number } | null = null
 
-  constructor(canvas: HTMLCanvasElement) {
+  /**
+   * Reports a failure that would otherwise be invisible.
+   *
+   * Both failure paths below used to end in `console.error` or, for the model
+   * load, in nothing at all — and a crown that fails to initialise renders
+   * nothing and produces no other symptom. A participant sees an empty filter
+   * and a session is recorded as having the crown active.
+   */
+  private onError?: (message: string) => void
+
+  constructor(canvas: HTMLCanvasElement, onError?: (message: string) => void) {
+    this.onError = onError
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -51,7 +76,9 @@ export class CrownFilter {
         }
       },
       (e: unknown) => {
+        const message = e instanceof Error ? e.message : String(e)
         console.error('[CrownFilter] renderer init failed:', e)
+        this.onError?.(`WebGPU/WebGL-Start fehlgeschlagen: ${message}`)
       },
     )
 
@@ -70,37 +97,48 @@ export class CrownFilter {
     this.scene.add(rimR)
 
     const loader = new GLTFLoader()
-    loader.load('/filters/crown.glb', (gltf) => {
-      const model = gltf.scene
+    loader.load(
+      '/filters/crown.glb',
+      (gltf) => {
+        const model = gltf.scene
 
-      // Normalise the model to a centred unit box, exactly as the native app
-      // does. Without the centring the pivot sits wherever crown.glb happens to
-      // have been authored, so pitch/yaw/roll swing the crown around an
-      // off-centre point instead of turning it in place; without the unit scale
-      // the pixel scaleFactor below means something different on each side.
-      const box = new THREE.Box3().setFromObject(model)
-      const size = box.getSize(new THREE.Vector3())
-      model.position.sub(box.getCenter(new THREE.Vector3()))
-      model.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1))
+        // Normalise the model to a centred unit box, exactly as the native app
+        // does. Without the centring the pivot sits wherever crown.glb happens to
+        // have been authored, so pitch/yaw/roll swing the crown around an
+        // off-centre point instead of turning it in place; without the unit scale
+        // the pixel scaleFactor below means something different on each side.
+        const box = new THREE.Box3().setFromObject(model)
+        const size = box.getSize(new THREE.Vector3())
+        model.position.sub(box.getCenter(new THREE.Vector3()))
+        model.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1))
 
-      // Rotate the pivot, never the model: the model carries the centring offset.
-      const pivot = new THREE.Group()
-      pivot.add(model)
-      this.crown = pivot
+        // Rotate the pivot, never the model: the model carries the centring offset.
+        const pivot = new THREE.Group()
+        pivot.add(model)
+        this.crown = pivot
 
-      // Clip away the back half of the crown — the part a real head would hide.
-      // The normal must point towards the camera: three discards fragments where
-      // `normal · p + constant < 0`, so (0, 0, 1) keeps the front (z >= 0). This
-      // was (0, 0, -1), which kept the *back* half and clipped the front, and is
-      // why the PWA showed the crown from behind while native showed its face.
-      // three's WebGPU backend reads clipping from a ClippingGroup rather than
-      // from the renderer, which is where WebGLRenderer took it.
-      const clipping = new THREE.ClippingGroup()
-      clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)]
-      clipping.add(pivot)
-      this.scene.add(clipping)
-      this.loaded = true
-    })
+        // Clip away the back half of the crown — the part a real head would hide.
+        // The normal must point towards the camera: three discards fragments where
+        // `normal · p + constant < 0`, so (0, 0, 1) keeps the front (z >= 0). This
+        // was (0, 0, -1), which kept the *back* half and clipped the front, and is
+        // why the PWA showed the crown from behind while native showed its face.
+        // three's WebGPU backend reads clipping from a ClippingGroup rather than
+        // from the renderer, which is where WebGLRenderer took it.
+        const clipping = new THREE.ClippingGroup()
+        clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)]
+        clipping.add(pivot)
+          this.scene.add(clipping)
+          this.loaded = true
+      },
+      undefined,
+      (e: unknown) => {
+        // Previously omitted entirely, so a model that failed to load did
+        // nothing at all — no log, no error, no crown.
+        const message = e instanceof Error ? e.message : String(e)
+        console.error('[CrownFilter] model load failed:', e)
+        this.onError?.(`Krone konnte nicht geladen werden: ${message}`)
+      },
+    )
   }
 
   /** Which backend three actually chose — submitted with the session. */
@@ -152,14 +190,15 @@ export class CrownFilter {
     const pRight = projectNormalized(fr.x, fr.y, geometry)
 
     const faceWidthPx = Math.hypot(pRight.x - pLeft.x, pRight.y - pLeft.y)
-    const scaleFactor = (faceWidthPx / 2) * 1.2
+    // The model is normalised to a unit box, so this IS the drawn width.
+    const scaleFactor = faceWidthPx * CROWN_WIDTH_RATIO
 
     // ── Position ────────────────────────────────────────────────────────────
     // projectNormalized returns top-down CSS pixels; the orthographic camera is
     // Y-up, so flip Y into its space.
     const cx = pTop.x
     const foreheadY = geometry.viewHeight - pTop.y
-    const cy = foreheadY + 0.34 * scaleFactor   // base ring sits at forehead landmark
+    const cy = foreheadY + LIFT * scaleFactor   // base ring sits at forehead landmark
 
     // ── Roll (Z rotation) ────────────────────────────────────────────────────
     // rawRoll < 0 when head tilts right (person's right ear down).

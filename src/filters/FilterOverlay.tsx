@@ -9,7 +9,8 @@ import { CrownFilter } from './CrownFilter'
 interface Props {
   activeFilters: ActiveFilters
   width: number
-  height: number
+  height: number  /** Surfaces a filter that failed to initialise, so it is not silent. */
+  onFilterError?: (message: string) => void
 }
 
 export interface FilterOverlayHandle {
@@ -26,7 +27,7 @@ export interface FilterOverlayHandle {
  * synchronised with the parent tracking loop — no second RAF loop needed.
  */
 export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
-  function FilterOverlay({ activeFilters, width, height }, ref) {
+  function FilterOverlay({ activeFilters, width, height, onFilterError }, ref) {
     const canvas2dRef    = useRef<HTMLCanvasElement>(null)
     const canvasThreeRef = useRef<HTMLCanvasElement>(null)
 
@@ -55,6 +56,13 @@ export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
     // Canvases are sized in device pixels, not CSS pixels: at a devicePixelRatio
     // of 3 a CSS-sized canvas renders at a third of the screen's resolution and
     // the filters look soft next to the native app's Skia output.
+    // Held in a ref: the handle below is created once, so it must not capture
+    // a stale callback identity.
+    const onFilterErrorRef = useRef(onFilterError)
+    useEffect(() => {
+      onFilterErrorRef.current = onFilterError
+    }, [onFilterError])
+
     const sizeRef = useRef({ width: 0, height: 0 })
     useEffect(() => {
       if (!width || !height) return
@@ -111,7 +119,7 @@ export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
         if (af.crown) {
           const canvas = canvasThreeRef.current
           if (canvas && !crownRef.current) {
-            crownRef.current = new CrownFilter(canvas)
+            crownRef.current = new CrownFilter(canvas, onFilterErrorRef.current)
             const { width: w, height: h } = sizeRef.current
             if (w && h) crownRef.current.resize(w, h)
           }

@@ -53,8 +53,37 @@ export class CrownFilter {
    */
   private onError?: (message: string) => void
 
-  constructor(canvas: HTMLCanvasElement, onError?: (message: string) => void) {
+  /**
+   * Reports how long each phase of start-up took, in milliseconds.
+   *
+   * The crown begins drawing seconds after the 2D filters do, because
+   * CrownFilter is constructed inside the render tick and so cannot begin until
+   * the session starts — while native now draws it from the first frame. That
+   * is a comparability problem, not a cosmetic one, and fixing it properly
+   * means knowing which phase actually dominates: the WebGPU device and
+   * pipeline setup, or fetching and parsing the 1.9 MB model.
+   */
+  private onTiming?: (message: string) => void
+
+  private readonly createdAt = performance.now()
+  private initMs?: number
+  private modelMs?: number
+
+  private reportTiming(): void {
+    if (this.initMs === undefined || this.modelMs === undefined) return
+    this.onTiming?.(
+      `Krone bereit: Renderer ${Math.round(this.initMs)} ms, ` +
+        `Modell ${Math.round(this.modelMs)} ms`,
+    )
+  }
+
+  constructor(
+    canvas: HTMLCanvasElement,
+    onError?: (message: string) => void,
+    onTiming?: (message: string) => void,
+  ) {
     this.onError = onError
+    this.onTiming = onTiming
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -69,6 +98,8 @@ export class CrownFilter {
     // frames of crown and nothing else.
     this.renderer.init().then(
       () => {
+        this.initMs = performance.now() - this.createdAt
+        this.reportTiming()
         this.ready = true
         if (this.pendingSize) {
           this.resize(this.pendingSize.width, this.pendingSize.height)

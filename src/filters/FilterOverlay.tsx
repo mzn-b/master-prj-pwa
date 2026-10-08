@@ -11,6 +11,8 @@ interface Props {
   width: number
   height: number  /** Surfaces a filter that failed to initialise, so it is not silent. */
   onFilterError?: (message: string) => void
+  /** Reports crown start-up timings; see CrownFilter. */
+  onFilterTiming?: (message: string) => void
 }
 
 export interface FilterOverlayHandle {
@@ -27,7 +29,7 @@ export interface FilterOverlayHandle {
  * synchronised with the parent tracking loop — no second RAF loop needed.
  */
 export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
-  function FilterOverlay({ activeFilters, width, height, onFilterError }, ref) {
+  function FilterOverlay({ activeFilters, width, height, onFilterError, onFilterTiming }, ref) {
     const canvas2dRef    = useRef<HTMLCanvasElement>(null)
     const canvasThreeRef = useRef<HTMLCanvasElement>(null)
 
@@ -62,6 +64,10 @@ export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
     useEffect(() => {
       onFilterErrorRef.current = onFilterError
     }, [onFilterError])
+    const onFilterTimingRef = useRef(onFilterTiming)
+    useEffect(() => {
+      onFilterTimingRef.current = onFilterTiming
+    }, [onFilterTiming])
 
     const sizeRef = useRef({ width: 0, height: 0 })
     useEffect(() => {
@@ -119,7 +125,11 @@ export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
         if (af.crown) {
           const canvas = canvasThreeRef.current
           if (canvas && !crownRef.current) {
-            crownRef.current = new CrownFilter(canvas, onFilterErrorRef.current)
+            crownRef.current = new CrownFilter(
+              canvas,
+              onFilterErrorRef.current,
+              onFilterTimingRef.current,
+            )
             const { width: w, height: h } = sizeRef.current
             if (w && h) crownRef.current.resize(w, h)
           }

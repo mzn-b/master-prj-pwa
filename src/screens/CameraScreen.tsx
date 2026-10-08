@@ -44,6 +44,7 @@ export function CameraScreen() {
     // A filter that fails to initialise draws nothing and says nothing; without
     // this a session is recorded believing the filter was active.
     const [filterError, setFilterError] = useState<string | null>(null);
+    const [filterTiming, setFilterTiming] = useState<string | null>(null);
     const [showPerformance, setShowPerformance] = useState(false);
     const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetricsDTO | null>(null);
     const [deviceCapabilities, setDeviceCapabilities] = useState<DeviceCapabilities | null>(null);
@@ -542,6 +543,7 @@ export function CameraScreen() {
                         width={overlayDims.width}
                         height={overlayDims.height}
                         onFilterError={setFilterError}
+                        onFilterTiming={setFilterTiming}
                     />
                 )}
 
@@ -591,6 +593,9 @@ export function CameraScreen() {
                     {displayError && <div style={s.error}>Kamera: {displayError}</div>}
                     {filterError !== null && (
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
+                    )}
+                    {filterTiming !== null && (
+                        <div style={s.warning}>{filterTiming}</div>
                     )}
                     {warnings.map(w => (
                         <div key={w} style={s.warning}>

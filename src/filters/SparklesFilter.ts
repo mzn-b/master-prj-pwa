@@ -1,26 +1,34 @@
 import type { TrackingDTO } from '../domain/tracking.dto'
 import { projectNormalized, type ViewGeometry } from '../render/coordinates'
+import {
+    particleOpacity,
+    spawnParticle,
+    stepParticles,
+    type Particle,
+} from './sparkleSystem'
 
 const FINGERTIP_INDICES = [4, 8, 12, 16, 20]
-const GRAVITY = 120 // px/s²
-const MAX_PARTICLES = 150
-const SPAWN_CHANCE = 0.35 // per fingertip per frame
-
-interface Particle {
-  x: number
-  y: number
-  vx: number
-  vy: number
-  life: number
-  maxLife: number
-  size: number
-}
+const SPARKLE_SIZE = 18
+const SPAWN_PER_TIP_PER_FRAME = 0.35
+/**
+ * Fixed simulation step, matching the native app's timer.
+ *
+ * Spawning used to happen once per *rendered* frame, so the particle count
+ * scaled with display rate: roughly twice native's on a 60 Hz panel and four
+ * times on a 120 Hz one. That is both a visible difference on a filter
+ * participants rate and more work per second on the same nominal filter.
+ * Stepping on an accumulator makes the simulation independent of frame rate,
+ * which is what native gets from its interval.
+ */
+const TICK_MS = 33
 
 export class SparklesFilter {
   private particles: Particle[] = []
   private img: HTMLImageElement | null = null
   private loaded = false
   private lastTime = 0
+  /** Leftover time not yet consumed by a fixed step. */
+  private accumulatorMs = 0
 
   constructor() {
     this.img = new Image()
@@ -34,63 +42,48 @@ export class SparklesFilter {
   }
 
   update(tracking: TrackingDTO, geometry: ViewGeometry, nowMs: number, spawning = true): void {
-    const dt = this.lastTime === 0 ? 0.016 : Math.min((nowMs - this.lastTime) / 1000, 0.05)
+    const elapsed = this.lastTime === 0 ? TICK_MS : nowMs - this.lastTime
     this.lastTime = nowMs
+    // Cap the catch-up so a backgrounded tab does not simulate a huge burst on
+    // its first frame back.
+    this.accumulatorMs = Math.min(this.accumulatorMs + elapsed, TICK_MS * 5)
 
-    // Spawn new particles at each detected fingertip — only while the filter is
-    // on. When it is off the existing particles still fall and fade out.
-    if (spawning && tracking.hand?.hands) {
-      for (const hand of tracking.hand.hands) {
+    while (this.accumulatorMs >= TICK_MS) {
+      this.accumulatorMs -= TICK_MS
+      this.particles = stepParticles(this.particles, TICK_MS)
+
+      // Spawn only while the filter is on; when it is off the existing
+      // particles still fall and fade out.
+      if (!spawning) continue
+      for (const hand of tracking.hand?.hands ?? []) {
         for (const idx of FINGERTIP_INDICES) {
           const lm = hand.landmarks[idx]
           if (!lm) continue
-          if (Math.random() > SPAWN_CHANCE) continue
-          if (this.particles.length >= MAX_PARTICLES) break
-
+          if (Math.random() > SPAWN_PER_TIP_PER_FRAME) continue
           // Mirroring and object-fit come from the shared projection —
           // see src/render/coordinates.ts.
           const { x, y } = projectNormalized(lm.x, lm.y, geometry)
-          const maxLife = 0.6 + Math.random() * 0.6
-          this.particles.push({
-            x,
-            y,
-            vx: (Math.random() - 0.5) * 60,
-            vy: -(20 + Math.random() * 40), // initial upward burst
-            life: maxLife,
-            maxLife,
-            size: 12 + Math.random() * 12,
-          })
+          this.particles.push(spawnParticle(x, y))
         }
       }
     }
-
-    // Tick existing particles
-    for (const p of this.particles) {
-      p.vy += GRAVITY * dt
-      p.x += p.vx * dt
-      p.y += p.vy * dt
-      p.life -= dt
-    }
-
-    // Remove expired — compact in-place to avoid per-frame array allocation
-    let writeIdx = 0;
-    for (let i = 0; i < this.particles.length; i++) {
-      if (this.particles[i].life > 0) {
-        if (writeIdx !== i) this.particles[writeIdx] = this.particles[i];
-        writeIdx++;
-      }
-    }
-    this.particles.length = writeIdx;
   }
 
   render(ctx: CanvasRenderingContext2D): void {
     if (!this.loaded || !this.img) return
 
     for (const p of this.particles) {
-      const alpha = Math.max(0, p.life / p.maxLife)
       ctx.save()
-      ctx.globalAlpha = alpha
-      ctx.drawImage(this.img, p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
+      // Same fade curve and same fixed size as native, which draws
+      // SPARKLE_SIZE square and uses particleOpacity for alpha.
+      ctx.globalAlpha = particleOpacity(p)
+      ctx.drawImage(
+        this.img,
+        p.x - SPARKLE_SIZE / 2,
+        p.y - SPARKLE_SIZE / 2,
+        SPARKLE_SIZE,
+        SPARKLE_SIZE,
+      )
       ctx.restore()
     }
   }

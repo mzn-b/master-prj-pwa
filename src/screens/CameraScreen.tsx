@@ -595,8 +595,18 @@ export function CameraScreen() {
                     {filterError !== null && (
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
                     )}
-                    {filterTiming !== null && (
-                        <div style={s.warning}>{filterTiming}</div>
+                    {/*
+                      Behind F14, not shown by default: this is diagnostic
+                      output, and a participant rating the two apps against each
+                      other should not be reading a German timing line that the
+                      native app has no equivalent of. The measurement still
+                      runs, so the numbers are available whenever the toggle is
+                      on. Crown start-up is a real platform difference — ~190 ms
+                      on iOS Safari against 300–1430 ms on Android Chrome — and
+                      is written up in THESIS-FINDINGS.md.
+                    */}
+                    {showDebug && filterTiming !== null && (
+                        <div style={s.buildStamp}>{filterTiming}</div>
                     )}
                     <div style={s.buildStamp}>Build {APP_VERSION}</div>
                     {warnings.map(w => (

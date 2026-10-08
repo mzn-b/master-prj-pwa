@@ -158,8 +158,10 @@ export class CrownFilter {
         const clipping = new THREE.ClippingGroup()
         clipping.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)]
         clipping.add(pivot)
-          this.scene.add(clipping)
-          this.loaded = true
+        this.scene.add(clipping)
+        this.loaded = true
+        this.modelMs = performance.now() - this.createdAt
+        this.reportTiming()
       },
       undefined,
       (e: unknown) => {

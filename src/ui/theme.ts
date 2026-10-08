@@ -226,6 +226,16 @@ export const s = {
         fontVariantNumeric: "tabular-nums",
     } satisfies CSSProperties,
 
+    /**
+     * The running build, shown so a stale service-worker cache is visible.
+     *
+     * The PWA precaches itself, so a device can keep serving an old bundle
+     * after a deploy. On 2026-10-08 that produced device reports about code
+     * that was not the code running. SURVEY-PROCEDURE.md asks for the build
+     * stamp per session; this is where to read it.
+     */
+    buildStamp: { color: color.muted, fontSize: 11, fontVariantNumeric: "tabular-nums" } satisfies CSSProperties,
+
     error: { color: color.error, fontSize: 14 } satisfies CSSProperties,
     warning: { color: color.warning, fontSize: 14 } satisfies CSSProperties,
 } as const;

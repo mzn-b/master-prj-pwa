@@ -20,6 +20,7 @@ import {PerformanceOverlay} from "../ui/PerformanceOverlay";
 import {color, s} from "../ui/theme";
 import {Switch} from "../ui/Switch";
 import {submitTrackingSession} from "../api/trackingApi";
+import {APP_VERSION} from "../config/buildInfo";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
 import {viewGeometryFromVideo} from "../render/coordinates";
@@ -597,6 +598,7 @@ export function CameraScreen() {
                     {filterTiming !== null && (
                         <div style={s.warning}>{filterTiming}</div>
                     )}
+                    <div style={s.buildStamp}>Build {APP_VERSION}</div>
                     {warnings.map(w => (
                         <div key={w} style={s.warning}>
                             {w}

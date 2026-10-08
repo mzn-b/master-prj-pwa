@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sync-wasm": "node scripts/sync-mediapipe-wasm.mjs"
+    "sync-wasm": "node scripts/sync-mediapipe-wasm.mjs",
+    "typecheck": "tsc -b --force"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.0.0",

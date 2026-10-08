@@ -24,11 +24,15 @@ import {APP_VERSION} from "../config/buildInfo";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
 import {viewGeometryFromVideo} from "../render/coordinates";
-import type {ActiveFilters, FilterId} from "../filters/types";
-import {DEFAULT_ACTIVE_FILTERS, FILTER_IDS, FILTER_LABELS} from "../filters/types";
+import type {ActiveFilters, AppMode, FilterId} from "../filters/types";
+import {
+    DEFAULT_ACTIVE_FILTERS,
+    FILTER_IDS,
+    FILTER_LABELS,
+    submittedFilters,
+} from "../filters/types";
 import {FilterOverlay, type FilterOverlayHandle} from "../filters/FilterOverlay";
 
-type AppMode = 'landmarks' | 'filters';
 
 export function CameraScreen() {
     const rafRef = useRef<number | null>(null);
@@ -149,8 +153,10 @@ export function CameraScreen() {
     const stop = useCallback(async () => {
         const finalMetrics = performanceTrackerRef.current?.getMetrics();
         const sessionMode = sessionModeRef.current;
-        const currentlyActive = (Object.keys(activeFiltersRef.current) as FilterId[])
-            .filter(k => activeFiltersRef.current[k]);
+        // Reports what was DRAWN, not what was selected: landmarks mode never
+        // mounts the filter overlay, and the selection survives a mode switch.
+        // Ported from the native app, which carried the same defect.
+        const currentlyActive = submittedFilters(appModeRef.current, activeFiltersRef.current);
 
         setIsTrackingActive(false);
 
@@ -203,8 +209,10 @@ export function CameraScreen() {
         if (isRunning && performanceTrackerRef.current) {
             const metrics = performanceTrackerRef.current.getMetrics();
             if (metrics.frameCount > 0) {
-                const currentlyActive = (Object.keys(activeFiltersRef.current) as FilterId[])
-                    .filter(k => activeFiltersRef.current[k]);
+                const currentlyActive = submittedFilters(
+                    appModeRef.current,
+                    activeFiltersRef.current,
+                );
                 try {
                     await submitTrackingSession('combined', metrics, currentlyActive);
                 } catch { /* tracking continues regardless */ }
@@ -213,6 +221,24 @@ export function CameraScreen() {
         }
         setActiveFilters(prev => ({ ...prev, [id]: !prev[id] }));
     }, [isRunning]);
+
+    /**
+     * Switching surface clears the filter selection, matching the native app.
+     *
+     * The two are independent state and only `appMode` gates rendering, so a
+     * selection left behind in landmarks mode is invisible but still submitted.
+     * Clearing keeps the state honest; submittedFilters() keeps the report
+     * honest even when it is not.
+     */
+    const handleAppMode = useCallback(
+        (next: AppMode) => {
+            if (isRunning) return;
+            setAppMode(next);
+            setActiveFilters(DEFAULT_ACTIVE_FILTERS);
+            setFilterError(null);
+        },
+        [isRunning],
+    );
 
     const start = useCallback(async () => {
         setError(null);
@@ -619,7 +645,7 @@ export function CameraScreen() {
                         {(["landmarks", "filters"] as AppMode[]).map(candidate => (
                             <button
                                 key={candidate}
-                                onClick={() => !isRunning && setAppMode(candidate)}
+                                onClick={() => handleAppMode(candidate)}
                                 style={{
                                     ...s.tab,
                                     ...(appMode === candidate

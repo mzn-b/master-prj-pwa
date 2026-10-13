@@ -53,9 +53,9 @@ const NEUTRAL_NOSE_RATIO = 0.38
  *   /?poke=1  crown appears  -> presentation problem, confirmed
  *   /?poke=1  no difference  -> hypothesis dead, look elsewhere
  */
-function pokeEnabled(): boolean {
+function flag(name: string): boolean {
   try {
-    return new URLSearchParams(window.location.search).has('poke')
+    return new URLSearchParams(window.location.search).has(name)
   } catch {
     return false
   }
@@ -93,7 +93,7 @@ export class CrownFilter {
   private onTiming?: (message: string) => void
 
   private readonly createdAt = performance.now()
-  private readonly poke = pokeEnabled()
+  private readonly poke = flag('poke')
   private pokeState = false
   /** The canvas we were handed, for the poke above. */
   private readonly canvas: HTMLCanvasElement
@@ -136,6 +136,21 @@ export class CrownFilter {
     this.onError = onError
     this.onTiming = onTiming
     this.canvas = canvas
+
+    // Candidate real fix: promote the canvas to its own compositing layer once,
+    // instead of invalidating it on every frame.
+    //
+    // ?poke=1 confirmed this is a presentation problem — the crown appears
+    // immediately with it and seconds late without. But toggling opacity both
+    // invalidates the canvas AND promotes it to its own layer, so it does not
+    // say which of the two is the cure. If promotion alone is enough, the fix
+    // costs nothing per frame; per-frame invalidation would add a style recalc
+    // to every PWA frame that native does not pay, which is a measurement
+    // confound on the arm being compared.
+    if (flag('layer')) {
+      canvas.style.willChange = 'transform'
+      canvas.style.transform = 'translateZ(0)'
+    }
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace

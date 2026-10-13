@@ -94,7 +94,10 @@ export class CrownFilter {
 
   private readonly createdAt = performance.now()
   private readonly poke = flag('poke')
+  private readonly burst = flag('burst')
   private pokeState = false
+  /** When poking began, for the bounded-burst experiment. */
+  private pokeStartedAt = 0
   /** The canvas we were handed, for the poke above. */
   private readonly canvas: HTMLCanvasElement
   private initMs?: number
@@ -346,12 +349,26 @@ export class CrownFilter {
     const drawStart = isFirstDraw ? performance.now() : 0
     this.renderer.render(this.scene, this.camera)
 
-    if (this.poke) {
-      // Invalidate the canvas so the compositor has to look at it again.
-      // Deliberately the smallest visible-to-the-engine change that is not a
-      // React render and not a WebGPU call.
-      this.pokeState = !this.pokeState
-      this.canvas.style.opacity = this.pokeState ? '0.999' : '1'
+    // ?layer=1 showed static layer promotion does NOT help, so invalidation is
+    // what matters, not which compositing layer the canvas lives on.
+    //
+    // The open question is cost. Poking every frame adds a style recalculation
+    // to every PWA frame that native never pays, on the arm being compared.
+    // ?burst=1 pokes only for the first two seconds after the first draw and
+    // then stops for good: if that is enough, the fix is bounded and costs
+    // nothing in the steady state the session actually measures.
+    if (this.poke || this.burst) {
+      if (this.pokeStartedAt === 0) {
+        this.pokeStartedAt = performance.now()
+      }
+      const within = !this.burst || performance.now() - this.pokeStartedAt < 2000
+      if (within) {
+        this.pokeState = !this.pokeState
+        this.canvas.style.opacity = this.pokeState ? '0.999' : '1'
+      } else if (this.canvas.style.opacity !== '1') {
+        // Leave it in a clean state once the burst ends.
+        this.canvas.style.opacity = '1'
+      }
     }
     if (isFirstDraw) {
       this.firstDrawAtMs = drawStart - this.createdAt

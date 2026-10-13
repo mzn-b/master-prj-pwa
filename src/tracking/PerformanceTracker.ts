@@ -214,6 +214,7 @@ export class PerformanceTracker {
         inferenceThreading?: string;
         smoothingEnabled?: boolean;
         dynamicInferenceEnabled?: boolean;
+        gpuDelegateEnabled?: boolean;
     } = {};
 
     // Cached hardware info (queried once at construction)
@@ -375,6 +376,7 @@ export class PerformanceTracker {
         inferenceThreading?: string;
         smoothingEnabled?: boolean;
         dynamicInferenceEnabled?: boolean;
+        gpuDelegateEnabled?: boolean;
     }): void {
         this.runConditions = { ...this.runConditions, ...conditions };
     }
@@ -699,6 +701,7 @@ export class PerformanceTracker {
             inferenceThreading: this.runConditions.inferenceThreading,
             smoothingEnabled: this.runConditions.smoothingEnabled,
             dynamicInferenceEnabled: this.runConditions.dynamicInferenceEnabled,
+            gpuDelegateEnabled: this.runConditions.gpuDelegateEnabled,
             timeToFirstDetectionMs: this.firstDetectionAt !== undefined
                 ? Math.round((this.firstDetectionAt - this.startTime) * 10) / 10
                 : undefined,

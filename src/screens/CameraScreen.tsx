@@ -342,6 +342,10 @@ export function CameraScreen() {
                 // them. Captured at start: the switches are disabled mid-run.
                 smoothingEnabled,
                 dynamicInferenceEnabled,
+                // The delegate *request*. `gpuDelegateActive` records what the
+                // engine reported building, which is unreliable on every arm, so
+                // it cannot identify a run made with the delegate off.
+                gpuDelegateEnabled,
             });
             perfTracker.start();
 

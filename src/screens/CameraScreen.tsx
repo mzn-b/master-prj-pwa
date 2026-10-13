@@ -49,7 +49,6 @@ export function CameraScreen() {
     // A filter that fails to initialise draws nothing and says nothing; without
     // this a session is recorded believing the filter was active.
     const [filterError, setFilterError] = useState<string | null>(null);
-    const [filterTiming, setFilterTiming] = useState<string | null>(null);
     const [showPerformance, setShowPerformance] = useState(false);
     const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetricsDTO | null>(null);
     const [deviceCapabilities, setDeviceCapabilities] = useState<DeviceCapabilities | null>(null);
@@ -570,7 +569,6 @@ export function CameraScreen() {
                         width={overlayDims.width}
                         height={overlayDims.height}
                         onFilterError={setFilterError}
-                        onFilterTiming={setFilterTiming}
                     />
                 )}
 
@@ -620,19 +618,6 @@ export function CameraScreen() {
                     {displayError && <div style={s.error}>Kamera: {displayError}</div>}
                     {filterError !== null && (
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
-                    )}
-                    {/*
-                      Behind F14, not shown by default: this is diagnostic
-                      output, and a participant rating the two apps against each
-                      other should not be reading a German timing line that the
-                      native app has no equivalent of. The measurement still
-                      runs, so the numbers are available whenever the toggle is
-                      on. Crown start-up is a real platform difference — ~190 ms
-                      on iOS Safari against 300–1430 ms on Android Chrome — and
-                      is written up in THESIS-FINDINGS.md.
-                    */}
-                    {showDebug && filterTiming !== null && (
-                        <div style={s.buildStamp}>{filterTiming}</div>
                     )}
                     <div style={s.buildStamp}>Build {APP_VERSION}</div>
                     {warnings.map(w => (

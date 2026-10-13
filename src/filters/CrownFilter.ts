@@ -61,62 +61,14 @@ export class CrownFilter {
    */
   private onError?: (message: string) => void
 
-  /**
-   * Reports how long each phase of start-up took, in milliseconds.
-   *
-   * The crown begins drawing seconds after the 2D filters do, because
-   * CrownFilter is constructed inside the render tick and so cannot begin until
-   * the session starts — while native now draws it from the first frame. That
-   * is a comparability problem, not a cosmetic one, and fixing it properly
-   * means knowing which phase actually dominates: the WebGPU device and
-   * pipeline setup, or fetching and parsing the 1.9 MB model.
-   */
-  private onTiming?: (message: string) => void
-
-  private readonly createdAt = performance.now()
+  /** The canvas we were handed; the compositor kick writes to its style. */
+  private readonly canvas: HTMLCanvasElement
   private kickState = false
   /** When the compositor kick began; see the note at the render site. */
   private kickStartedAt = 0
-  /** The canvas we were handed; the compositor kick writes to its style. */
-  private readonly canvas: HTMLCanvasElement
-  private initMs?: number
-  private modelMs?: number
-  /** When the first drawable frame was attempted, relative to construction. */
-  private firstDrawAtMs?: number
-  /** How long that first render() call itself took. */
-  private firstDrawMs?: number
 
-  /**
-   * Reports progressively, rather than waiting for every phase.
-   *
-   * Measured on device: renderer 6 ms and model 185 ms on iOS against 945 ms on
-   * Android — yet iOS is the arm that shows the crown seconds late. So the cost
-   * is not initialisation, and the two draw figures below separate the
-   * remaining possibilities: a first draw that happens late (waiting on
-   * readiness or on a detected face) from a first draw that is itself slow
-   * (pipeline compilation on first use).
-   */
-  private reportTiming(): void {
-    const parts: string[] = []
-    if (this.initMs !== undefined) parts.push(`Renderer ${Math.round(this.initMs)} ms`)
-    if (this.modelMs !== undefined) parts.push(`Modell ${Math.round(this.modelMs)} ms`)
-    if (this.firstDrawAtMs !== undefined) {
-      parts.push(`1. Frame bei ${Math.round(this.firstDrawAtMs)} ms`)
-    }
-    if (this.firstDrawMs !== undefined) {
-      parts.push(`Dauer ${Math.round(this.firstDrawMs)} ms`)
-    }
-    if (parts.length === 0) return
-    this.onTiming?.(`Krone: ${parts.join(', ')}`)
-  }
-
-  constructor(
-    canvas: HTMLCanvasElement,
-    onError?: (message: string) => void,
-    onTiming?: (message: string) => void,
-  ) {
+  constructor(canvas: HTMLCanvasElement, onError?: (message: string) => void) {
     this.onError = onError
-    this.onTiming = onTiming
     this.canvas = canvas
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
@@ -132,8 +84,6 @@ export class CrownFilter {
     // frames of crown and nothing else.
     this.renderer.init().then(
       () => {
-        this.initMs = performance.now() - this.createdAt
-        this.reportTiming()
         this.ready = true
         if (this.pendingSize) {
           this.resize(this.pendingSize.width, this.pendingSize.height)
@@ -194,8 +144,6 @@ export class CrownFilter {
         clipping.add(pivot)
         this.scene.add(clipping)
         this.loaded = true
-        this.modelMs = performance.now() - this.createdAt
-        this.reportTiming()
       },
       undefined,
       (e: unknown) => {
@@ -309,8 +257,6 @@ export class CrownFilter {
     this.crown.rotation.set(pitch, yaw, roll)
     this.crown.scale.setScalar(scaleFactor)
 
-    const isFirstDraw = this.firstDrawMs === undefined
-    const drawStart = isFirstDraw ? performance.now() : 0
     this.renderer.render(this.scene, this.camera)
 
     // Kick Safari's compositor for the first two seconds.
@@ -349,11 +295,6 @@ export class CrownFilter {
       this.canvas.style.opacity = '1'
     }
 
-    if (isFirstDraw) {
-      this.firstDrawAtMs = drawStart - this.createdAt
-      this.firstDrawMs = performance.now() - drawStart
-      this.reportTiming()
-    }
   }
 
   dispose(): void {

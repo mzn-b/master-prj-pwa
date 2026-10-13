@@ -35,31 +35,12 @@ const CHIN = 152
 const NEUTRAL_NOSE_RATIO = 0.38
 
 /**
- * Temporary diagnostic for TODO §15 — the crown does not render on iOS Safari
- * unless the F14 debug HUD is on.
+ * How long to keep invalidating the canvas after the first draw, in ms.
  *
- * Two independent observations point at a React re-render being the thing that
- * makes it appear, not anything in the WebGPU path: it started working when a
- * state update was added on first draw, and it works while the debug HUD's
- * 500 ms `setLatestTracking` keeps the tree repainting. The measurements rule
- * out the obvious culprits — iOS reaches its first drawn frame in 147–239 ms,
- * faster and steadier than Android, which renders fine.
- *
- * So the hypothesis is that Safari is not compositing the WebGPU canvas until
- * something else invalidates it. `?poke=1` forces that invalidation directly
- * from the draw loop, touching nothing else. Loading the page without the flag
- * is the control: same build, same code path, no poke.
- *
- *   /?poke=1  crown appears  -> presentation problem, confirmed
- *   /?poke=1  no difference  -> hypothesis dead, look elsewhere
+ * Two seconds is what was verified on device; the compositor needs starting
+ * once and then behaves. See the note at the use site.
  */
-function flag(name: string): boolean {
-  try {
-    return new URLSearchParams(window.location.search).has(name)
-  } catch {
-    return false
-  }
-}
+const COMPOSITOR_KICK_MS = 2000
 
 export class CrownFilter {
   private renderer: THREE.WebGPURenderer
@@ -93,12 +74,10 @@ export class CrownFilter {
   private onTiming?: (message: string) => void
 
   private readonly createdAt = performance.now()
-  private readonly poke = flag('poke')
-  private readonly burst = flag('burst')
-  private pokeState = false
-  /** When poking began, for the bounded-burst experiment. */
-  private pokeStartedAt = 0
-  /** The canvas we were handed, for the poke above. */
+  private kickState = false
+  /** When the compositor kick began; see the note at the render site. */
+  private kickStartedAt = 0
+  /** The canvas we were handed; the compositor kick writes to its style. */
   private readonly canvas: HTMLCanvasElement
   private initMs?: number
   private modelMs?: number
@@ -139,21 +118,6 @@ export class CrownFilter {
     this.onError = onError
     this.onTiming = onTiming
     this.canvas = canvas
-
-    // Candidate real fix: promote the canvas to its own compositing layer once,
-    // instead of invalidating it on every frame.
-    //
-    // ?poke=1 confirmed this is a presentation problem — the crown appears
-    // immediately with it and seconds late without. But toggling opacity both
-    // invalidates the canvas AND promotes it to its own layer, so it does not
-    // say which of the two is the cure. If promotion alone is enough, the fix
-    // costs nothing per frame; per-frame invalidation would add a style recalc
-    // to every PWA frame that native does not pay, which is a measurement
-    // confound on the arm being compared.
-    if (flag('layer')) {
-      canvas.style.willChange = 'transform'
-      canvas.style.transform = 'translateZ(0)'
-    }
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -349,27 +313,42 @@ export class CrownFilter {
     const drawStart = isFirstDraw ? performance.now() : 0
     this.renderer.render(this.scene, this.camera)
 
-    // ?layer=1 showed static layer promotion does NOT help, so invalidation is
-    // what matters, not which compositing layer the canvas lives on.
+    // Kick Safari's compositor for the first two seconds.
     //
-    // The open question is cost. Poking every frame adds a style recalculation
-    // to every PWA frame that native never pays, on the arm being compared.
-    // ?burst=1 pokes only for the first two seconds after the first draw and
-    // then stops for good: if that is enough, the fix is bounded and costs
-    // nothing in the steady state the session actually measures.
-    if (this.poke || this.burst) {
-      if (this.pokeStartedAt === 0) {
-        this.pokeStartedAt = performance.now()
-      }
-      const within = !this.burst || performance.now() - this.pokeStartedAt < 2000
-      if (within) {
-        this.pokeState = !this.pokeState
-        this.canvas.style.opacity = this.pokeState ? '0.999' : '1'
-      } else if (this.canvas.style.opacity !== '1') {
-        // Leave it in a clean state once the burst ends.
-        this.canvas.style.opacity = '1'
-      }
+    // On iOS Safari the crown appeared several seconds after the other filters.
+    // It is a presentation problem, not a rendering one: the frame is drawn on
+    // time — iOS reaches its first drawn frame in 147-239 ms, faster and
+    // steadier than Android, which shows it immediately — but Safari does not
+    // composite the WebGPU canvas until something else on the page repaints.
+    //
+    // That is why it worked with the debug HUD on. The metrics interval already
+    // fires `setPerformanceMetrics` every 500 ms, but with the HUDs hidden that
+    // state update changes no DOM and nothing repaints; with a HUD visible its
+    // text changes and the canvas is composited along with it.
+    //
+    // Established by experiment rather than inference, after three wrong
+    // theories (initialisation cost, model loading, pipeline compilation):
+    //   - invalidating the canvas per frame  -> immediate, and it keeps working
+    //   - `will-change` + `translateZ(0)`    -> no effect, so layer promotion
+    //                                           is not the cure, invalidation is
+    //   - invalidating for 2 s then stopping -> immediate, and still correct
+    //                                           long after the kick ends
+    //
+    // So the compositor only needs starting once. Bounding it matters: poking
+    // every frame would add a style recalculation to every PWA frame that the
+    // native app never pays, on the arm being compared — a measurement confound
+    // dressed up as a fix. This costs roughly 60-240 style writes once per
+    // session, inside the warm-up window, and nothing thereafter.
+    if (this.kickStartedAt === 0) {
+      this.kickStartedAt = performance.now()
     }
+    if (performance.now() - this.kickStartedAt < COMPOSITOR_KICK_MS) {
+      this.kickState = !this.kickState
+      this.canvas.style.opacity = this.kickState ? '0.999' : '1'
+    } else if (this.canvas.style.opacity !== '1') {
+      this.canvas.style.opacity = '1'
+    }
+
     if (isFirstDraw) {
       this.firstDrawAtMs = drawStart - this.createdAt
       this.firstDrawMs = performance.now() - drawStart

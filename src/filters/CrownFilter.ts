@@ -34,6 +34,33 @@ const CHIN = 152
 // Neutral ratio: nose Y is ~38% of face height below the eye midpoint when looking straight
 const NEUTRAL_NOSE_RATIO = 0.38
 
+/**
+ * Temporary diagnostic for TODO §15 — the crown does not render on iOS Safari
+ * unless the F14 debug HUD is on.
+ *
+ * Two independent observations point at a React re-render being the thing that
+ * makes it appear, not anything in the WebGPU path: it started working when a
+ * state update was added on first draw, and it works while the debug HUD's
+ * 500 ms `setLatestTracking` keeps the tree repainting. The measurements rule
+ * out the obvious culprits — iOS reaches its first drawn frame in 147–239 ms,
+ * faster and steadier than Android, which renders fine.
+ *
+ * So the hypothesis is that Safari is not compositing the WebGPU canvas until
+ * something else invalidates it. `?poke=1` forces that invalidation directly
+ * from the draw loop, touching nothing else. Loading the page without the flag
+ * is the control: same build, same code path, no poke.
+ *
+ *   /?poke=1  crown appears  -> presentation problem, confirmed
+ *   /?poke=1  no difference  -> hypothesis dead, look elsewhere
+ */
+function pokeEnabled(): boolean {
+  try {
+    return new URLSearchParams(window.location.search).has('poke')
+  } catch {
+    return false
+  }
+}
+
 export class CrownFilter {
   private renderer: THREE.WebGPURenderer
   private scene: THREE.Scene
@@ -66,6 +93,10 @@ export class CrownFilter {
   private onTiming?: (message: string) => void
 
   private readonly createdAt = performance.now()
+  private readonly poke = pokeEnabled()
+  private pokeState = false
+  /** The canvas we were handed, for the poke above. */
+  private readonly canvas: HTMLCanvasElement
   private initMs?: number
   private modelMs?: number
   /** When the first drawable frame was attempted, relative to construction. */
@@ -104,6 +135,7 @@ export class CrownFilter {
   ) {
     this.onError = onError
     this.onTiming = onTiming
+    this.canvas = canvas
     this.renderer = new THREE.WebGPURenderer({ canvas, alpha: true, antialias: true })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -298,6 +330,14 @@ export class CrownFilter {
     const isFirstDraw = this.firstDrawMs === undefined
     const drawStart = isFirstDraw ? performance.now() : 0
     this.renderer.render(this.scene, this.camera)
+
+    if (this.poke) {
+      // Invalidate the canvas so the compositor has to look at it again.
+      // Deliberately the smallest visible-to-the-engine change that is not a
+      // React render and not a WebGPU call.
+      this.pokeState = !this.pokeState
+      this.canvas.style.opacity = this.pokeState ? '0.999' : '1'
+    }
     if (isFirstDraw) {
       this.firstDrawAtMs = drawStart - this.createdAt
       this.firstDrawMs = performance.now() - drawStart

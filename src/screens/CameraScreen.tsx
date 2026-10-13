@@ -56,6 +56,19 @@ export function CameraScreen() {
 
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
     const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
+    /**
+     * Requests the MediaPipe GPU delegate. Default on, matching how every
+     * session so far was recorded.
+     *
+     * Exposed so the delegate can be tested rather than assumed: the
+     * `gpuDelegateActive` column reports that the delegate was requested and
+     * built, not that inference ran on the GPU, and it has never correlated
+     * with performance. Matched pairs with it off are the decisive test.
+     *
+     * Read when the engine is created, so it takes effect on the next start —
+     * hence disabled while running, like the threading toggle.
+     */
+    const [gpuDelegateEnabled, setGpuDelegateEnabled] = useState(true);
     const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
     const [showDebug, setShowDebug] = useState(false);
     /**
@@ -309,7 +322,7 @@ export function CameraScreen() {
                 mode: effectiveMode,
                 maxFaces: 1,
                 maxHands: 2,
-                useGPU: true,
+                useGPU: gpuDelegateEnabled,
                 onResult,
                 onError: message => {
                     performanceTrackerRef.current?.recordError();
@@ -458,7 +471,7 @@ export function CameraScreen() {
             setError(msg);
             await stop();
         }
-    }, [mode, smoothingEnabled, dynamicInferenceEnabled, threading, stop, renderOverlay, camera]);
+    }, [mode, smoothingEnabled, dynamicInferenceEnabled, gpuDelegateEnabled, threading, stop, renderOverlay, camera]);
 
     useEffect(() => {
         if (smootherRef.current) {
@@ -683,6 +696,7 @@ export function CameraScreen() {
                     <div style={s.settingsCard}>
                         {toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
                         {toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
+                        {toggle("GPU-Delegate", gpuDelegateEnabled, setGpuDelegateEnabled, isRunning)}
                         {toggle("Performance-HUD", showPerformance, setShowPerformance)}
                         {toggle("F14: Debug-HUD", showDebug, setShowDebug)}
                         {/* No native counterpart: the threading toggle exists only on

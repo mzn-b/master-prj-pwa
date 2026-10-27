@@ -39,7 +39,7 @@ describe("consent text", () => {
         expect(all).toMatch(/widerruf/i); // right to withdraw
         expect(all).toMatch(/gelöscht/i); // retention / erasure
         expect(all).toMatch(/Datenschutzbehörde/); // right to complain
-        expect(CONSENT_CONTROLLER.body).toMatch(/FH Campus Wien/);
+        expect(CONSENT_CONTROLLER.body).toMatch(/Hochschule Campus Wien/);
     });
 
     it("states plainly that the camera image never leaves the device", () => {

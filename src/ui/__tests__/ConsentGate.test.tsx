@@ -49,7 +49,7 @@ describe("ConsentGate", () => {
     it("names the controller, which Art. 13 requires", () => {
         render(<ConsentGate onAccept={() => {}} />);
         expect(screen.getByText(/Verantwortlich für die Verarbeitung/)).toBeTruthy();
-        expect(screen.getByText(/FH Campus Wien/)).toBeTruthy();
+        expect(screen.getByText(/Hochschule Campus Wien/)).toBeTruthy();
     });
 
     it("states that the camera image never leaves the device", () => {

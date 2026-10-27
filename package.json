@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:survey": "tsc -b && vite build --mode survey",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

@@ -21,6 +21,7 @@ import {color, s} from "../ui/theme";
 import {Switch} from "../ui/Switch";
 import {submitTrackingSession} from "../api/trackingApi";
 import {APP_VERSION} from "../config/buildInfo";
+import {SURVEY_BUILD} from "../config/surveyBuild";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
 import {viewGeometryFromVideo} from "../render/coordinates";
@@ -658,7 +659,7 @@ export function CameraScreen() {
                     {filterError !== null && (
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
                     )}
-                    <div style={s.buildStamp}>Build {APP_VERSION}</div>
+                    <div style={s.buildStamp}>Build {APP_VERSION}{SURVEY_BUILD ? " (Studie)" : ""}</div>
                     {warnings.map(w => (
                         <div key={w} style={s.warning}>
                             {w}
@@ -723,12 +724,15 @@ export function CameraScreen() {
                         {toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
                         {toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
                         {toggle("GPU-Delegate", gpuDelegateEnabled, setGpuDelegateEnabled, isRunning)}
-                        {toggle("Performance-HUD", showPerformance, setShowPerformance)}
-                        {toggle("F14: Debug-HUD", showDebug, setShowDebug)}
+                        {/* Hidden in the survey build: the HUD readouts differ between
+                            the apps and the worker toggle names the web, either of
+                            which would tell a participant which one this is. */}
+                        {!SURVEY_BUILD && toggle("Performance-HUD", showPerformance, setShowPerformance)}
+                        {!SURVEY_BUILD && toggle("F14: Debug-HUD", showDebug, setShowDebug)}
                         {/* No native counterpart: the threading toggle exists only on
                             the web side, because only the web has two options to
                             compare. Kept last so the shared rows line up. */}
-                        {toggle(
+                        {!SURVEY_BUILD && toggle(
                             "Inferenz im Web Worker",
                             threading === "worker",
                             next => setThreading(next ? "worker" : "main"),

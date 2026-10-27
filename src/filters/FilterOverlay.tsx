@@ -19,6 +19,11 @@ export interface FilterOverlayHandle {
    * mirroring and object-fit for this frame; no filter derives them itself.
    */
   tick(tracking: TrackingDTO | null, geometry: ViewGeometry): void
+  /**
+   * The backend three chose for the crown, or undefined if the crown has not
+   * been constructed. Read when a session is submitted; see drawnRenderBackend().
+   */
+  crownBackend(): 'webgpu' | 'webgl' | 'pending' | undefined
 }
 
 /**
@@ -125,6 +130,9 @@ export const FilterOverlay = forwardRef<FilterOverlayHandle, Props>(
           }
           if (tracking) crownRef.current?.render(tracking, geometry)
         }
+      },
+      crownBackend() {
+        return crownRef.current?.backend()
       },
     }), [])
 

@@ -29,6 +29,7 @@ import {
     DEFAULT_ACTIVE_FILTERS,
     FILTER_IDS,
     FILTER_LABELS,
+    drawnRenderBackend,
     submittedFilters,
 } from "../filters/types";
 import {FilterOverlay, type FilterOverlayHandle} from "../filters/FilterOverlay";
@@ -162,7 +163,27 @@ export function CameraScreen() {
         return canStartTracking(deviceCapabilities);
     }, [isRunning, isCheckingDevice, deviceCapabilities]);
 
+    /**
+     * Records which drawing paths produced the session about to be submitted.
+     *
+     * Done at submission rather than at start, for two reasons: the crown's
+     * backend is known only once three has initialised, which is after the
+     * first frame that draws it; and a filter toggle changes the paths mid-run.
+     * Setting it from the landmark renderer alone labelled every filter session
+     * with a renderer that drew nothing in it.
+     */
+    const recordDrawnBackend = useCallback(() => {
+        performanceTrackerRef.current?.setRunConditions({
+            renderBackend: drawnRenderBackend(appModeRef.current, activeFiltersRef.current, {
+                landmarks: capabilitiesRef.current?.backend,
+                flat: "canvas2d",
+                crown: filterOverlayRef.current?.crownBackend(),
+            }),
+        });
+    }, []);
+
     const stop = useCallback(async () => {
+        recordDrawnBackend();
         const finalMetrics = performanceTrackerRef.current?.getMetrics();
         const sessionMode = sessionModeRef.current;
         // Reports what was DRAWN, not what was selected: landmarks mode never
@@ -211,7 +232,7 @@ export function CameraScreen() {
                 setTimeout(() => setUploadStatus(null), 3000);
             }
         }
-    }, [camera]);
+    }, [camera, recordDrawnBackend]);
 
     /**
      * Submit current session metrics and reset the tracker, then toggle the filter.
@@ -219,6 +240,7 @@ export function CameraScreen() {
      */
     const handleFilterToggle = useCallback(async (id: FilterId) => {
         if (isRunning && performanceTrackerRef.current) {
+            recordDrawnBackend();
             const metrics = performanceTrackerRef.current.getMetrics();
             if (metrics.frameCount > 0) {
                 const currentlyActive = submittedFilters(
@@ -232,7 +254,7 @@ export function CameraScreen() {
             }
         }
         setActiveFilters(prev => ({ ...prev, [id]: !prev[id] }));
-    }, [isRunning]);
+    }, [isRunning, recordDrawnBackend]);
 
     /**
      * Switching surface clears the filter selection, matching the native app.

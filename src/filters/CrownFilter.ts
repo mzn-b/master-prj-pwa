@@ -3,7 +3,7 @@
 // measures the graphics API rather than the platform (NF4). WebGPURenderer falls
 // back to a WebGL backend on its own where WebGPU is unavailable, so this still
 // runs on older Safari — and the backend it actually chose is reported below and
-// submitted with the session.
+// submitted with the session, through drawnRenderBackend().
 import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { projectNormalized, type ViewGeometry } from '../render/coordinates'

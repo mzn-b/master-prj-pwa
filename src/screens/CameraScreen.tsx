@@ -689,8 +689,10 @@ export function CameraScreen() {
                         ))}
                     </div>
 
+                    {/* The survey build offers no tracking-mode choice: every study
+                        run tracks face and hand together (thesis §6.1.2), the default. */}
                     {appMode === "landmarks" ? (
-                        <div style={s.row}>
+                        !SURVEY_BUILD && <div style={s.row}>
                             {(["face", "hand", "combined"] as TrackingMode[]).map(candidate => (
                                 <button
                                     key={candidate}
@@ -725,14 +727,17 @@ export function CameraScreen() {
                         </div>
                     )}
 
-                    {/* SettingsSheet.tsx — always visible in the panel, not behind a button. */}
-                    <div style={s.settingsCard}>
-                        {toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
-                        {toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
-                        {toggle("GPU-Delegate", gpuDelegateEnabled, setGpuDelegateEnabled, isRunning)}
-                        {/* Hidden in the survey build: the HUD readouts differ between
-                            the apps and the worker toggle names the web, either of
-                            which would tell a participant which one this is. */}
+                    {/* SettingsSheet.tsx — always visible in the panel, not behind a button.
+                        The survey build shows none of these settings: participants
+                        hold the phone and the operator only selects the view and the
+                        filters, so every study run keeps the study settings (thesis
+                        §6.1.2), which are the defaults. Beyond that, the HUD readouts
+                        differ between the apps and the worker toggle names the web,
+                        either of which would tell a participant which one this is. */}
+                    {(!SURVEY_BUILD || surveyUrl) && <div style={s.settingsCard}>
+                        {!SURVEY_BUILD && toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
+                        {!SURVEY_BUILD && toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
+                        {!SURVEY_BUILD && toggle("GPU-Delegate", gpuDelegateEnabled, setGpuDelegateEnabled, isRunning)}
                         {!SURVEY_BUILD && toggle("Performance-HUD", showPerformance, setShowPerformance)}
                         {!SURVEY_BUILD && toggle("F14: Debug-HUD", showDebug, setShowDebug)}
                         {/* No native counterpart: the threading toggle exists only on
@@ -749,7 +754,7 @@ export function CameraScreen() {
                                 UX Feedback
                             </a>
                         )}
-                    </div>
+                    </div>}
                 </div>
             </div>
         </div>

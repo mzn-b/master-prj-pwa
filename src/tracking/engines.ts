@@ -235,9 +235,13 @@ export async function createEngine(
     options: EngineOptions,
 ): Promise<TrackingEngine> {
     if (threading === "main") {
+        // useGPU must be passed here as well: without it init() defaults to the
+        // GPU delegate, and the GPU-Delegate switch had no effect on the
+        // main-thread engine (found in the thesis audit, 2026-10-28) while the
+        // session still recorded the switch position.
         const { controller, modelLoadTimeMs, gpuDelegateUsed } = await TrackingController.init(
             options.mode,
-            { maxFaces: options.maxFaces, maxHands: options.maxHands },
+            { maxFaces: options.maxFaces, maxHands: options.maxHands, useGPU: options.useGPU },
         );
         return new MainThreadEngine(controller, modelLoadTimeMs, gpuDelegateUsed, options);
     }

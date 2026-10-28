@@ -33,6 +33,16 @@ describe("detectPlatform", () => {
         expect(detectPlatform(WINDOWS)).toBeNull();
     });
 
+    it("recognises an iPad, whose Safari presents itself as a Mac, by its touch points", () => {
+        Object.defineProperty(navigator, "maxTouchPoints", { value: 5, configurable: true });
+        try {
+            expect(detectPlatform(MAC_CHROME)).toBe("IOS_PWA");
+        } finally {
+            delete (navigator as { maxTouchPoints?: number }).maxTouchPoints;
+        }
+        expect(detectPlatform(MAC_CHROME)).toBeNull();
+    });
+
     it("only ever returns a PWA platform value", () => {
         for (const ua of [IPHONE, ANDROID, MAC_CHROME, WINDOWS]) {
             const p = detectPlatform(ua);

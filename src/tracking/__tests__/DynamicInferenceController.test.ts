@@ -68,6 +68,24 @@ describe("DynamicInferenceController (F15)", () => {
         expect(c.getCurrentFrameSkip()).toBe(1);
     });
 
+    it("does not adjust on fewer than three samples", () => {
+        const c = new DynamicInferenceController({ ...DEFAULT_DYNAMIC_INFERENCE_CONFIG, adjustmentInterval: 1 });
+        feed(c, 200, 2);
+        expect(c.getCurrentFrameSkip()).toBe(1);
+        feed(c, 200, 1);
+        expect(c.getCurrentFrameSkip()).toBe(3);
+    });
+
+    it("keeps its skip while switched off and back on mid-run", () => {
+        // CameraScreen pushes the F15 switch into the running controller.
+        const c = new DynamicInferenceController();
+        feed(c, 200, 20);
+        c.setConfig({ enabled: false });
+        expect(c.getCurrentFrameSkip()).toBe(1);
+        c.setConfig({ enabled: true });
+        expect(c.getCurrentFrameSkip()).toBe(3);
+    });
+
     it("returns to 1 after reset", () => {
         const c = new DynamicInferenceController();
         feed(c, 200, 60);

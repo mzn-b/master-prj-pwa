@@ -284,6 +284,14 @@ export function CameraScreen() {
         const effectiveMode: TrackingMode = appModeRef.current === 'filters' ? 'combined' : mode;
         sessionModeRef.current = effectiveMode;
 
+        // The session clock starts when Start is pressed, before the camera
+        // and the models start, as on native (useTracking.start). Starting it
+        // after both had loaded made NF3's time to first detection and the
+        // session duration behind avgFps cover different spans on the two
+        // implementations (thesis audit, 2026-10-28).
+        const perfTracker = new PerformanceTracker();
+        perfTracker.start();
+
         try {
             const cameraStarted = await camera.start();
             if (!cameraStarted) return;
@@ -291,7 +299,6 @@ export function CameraScreen() {
             const video = videoRef.current;
             if (!video) throw new Error("Video element fehlt.");
 
-            const perfTracker = new PerformanceTracker();
             performanceTrackerRef.current = perfTracker;
 
             smootherRef.current = new LandmarkSmoother({
@@ -370,7 +377,6 @@ export function CameraScreen() {
                 // it cannot identify a run made with the delegate off.
                 gpuDelegateEnabled,
             });
-            perfTracker.start();
 
             setIsTrackingActive(true);
 

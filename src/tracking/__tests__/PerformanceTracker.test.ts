@@ -131,6 +131,10 @@ describe("PerformanceTracker", () => {
         expect(m.frameCount).toBe(0);
         expect(m.warmupComplete).toBe(false);
         expect(m.trackingLostCount).toBe(0);
+        // The session-wide series too: before 2026-10-28 reset() left them, so
+        // the next session's percentiles still held the previous one's frames.
+        expect(m.frameIntervalP50Ms).toBeUndefined();
+        expect(m.inferenceTimeP50Ms).toBeUndefined();
     });
 
     it("counts errors", () => {
@@ -270,14 +274,28 @@ describe("PerformanceTracker percentiles", () => {
 
     it("distinguishes judder from a slow average", () => {
         // Alternating 5 ms and 60 ms frames: the interval p95 exposes the
-        // stutter that avgFps averages away.
-        for (let i = 0; i < 40; i++) {
+        // stutter that avgFps averages away. 41 frames give 40 intervals, since
+        // the first frame only sets the reference.
+        for (let i = 0; i < 41; i++) {
             const start = t.recordFrameStart();
             vi.advanceTimersByTime(i % 2 === 0 ? 5 : 60);
             t.recordFrameEnd(start, true);
         }
         const m = t.getMetrics();
         expect(m.frameIntervalP95Ms!).toBeGreaterThan(m.frameIntervalP50Ms!);
+    });
+
+    it("does not count the gap from start to the first frame as an interval", () => {
+        // Camera and model start-up sit between start() and the first frame;
+        // counted as an interval it would become the session's worst frame.
+        vi.advanceTimersByTime(2000);
+        for (let i = 0; i < 11; i++) {
+            const start = t.recordFrameStart();
+            vi.advanceTimersByTime(33);
+            t.recordFrameEnd(start, true);
+        }
+        const m = t.getMetrics();
+        expect(m.frameIntervalP99Ms).toBe(33);
     });
 
     it("omits percentiles rather than reporting zero for an empty session", () => {

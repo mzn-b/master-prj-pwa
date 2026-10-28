@@ -286,7 +286,11 @@ export class PerformanceTracker {
 
     start(): void {
         this.startTime = performance.now();
-        this.lastFrameTime = this.startTime;
+        // No interval before the first frame: the gap from Start to the first
+        // processed frame is camera and model start-up, not a frame interval.
+        // NaN fails the `frameTime > 0` check below, so the first frame only
+        // sets the reference. Matches native, whose worklet skips it too.
+        this.lastFrameTime = Number.NaN;
         this.frameCount = 0;
         this.droppedFrames = 0;
         this.trackingLostCount = 0;
@@ -334,30 +338,13 @@ export class PerformanceTracker {
      * so that the next session starts fresh.
      */
     reset(): void {
-        this.startTime = performance.now();
-        this.lastFrameTime = this.startTime;
-        this.frameCount = 0;
-        this.droppedFrames = 0;
-        this.trackingLostCount = 0;
-        this.warmupComplete = false;
-        this.lastTrackingValid = false;
-        this.minFps = Infinity;
-        this.maxFps = 0;
-        this.frameTimes.reset();
-        this.inferenceTimes.reset();
-        this.processingTimes.reset();
-        this.totalFacesDetected = 0;
-        this.totalHandsDetected = 0;
-        this.detectionFrameCount = 0;
-        this.peakMemoryUsageMB = 0;
-        this.batteryLevelStart = undefined;
-        this.memoryUsageStartMB = undefined;
-        this.errorCount = 0;
-        this.trackingLostTime = 0;
-        this.totalRecoveryTimeMs = 0;
-        this.recoveryCount = 0;
-        this.currentConsecutiveLoss = 0;
-        this.consecutiveTrackingLossMax = 0;
+        // Everything start() clears, including the session-wide percentile
+        // series, the drop counts by cause and the detection-quality sums; the
+        // hand-written subset this replaced let those run on into the next
+        // session (thesis audit, 2026-10-28). Unlike start(), it also forgets
+        // the model load time, which belongs to the window in which the models
+        // were loaded, as on native.
+        this.start();
         this.modelLoadTimeMs = undefined;
     }
 

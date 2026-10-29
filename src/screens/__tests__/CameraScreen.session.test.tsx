@@ -205,6 +205,26 @@ describe("CameraScreen session", () => {
         });
     });
 
+    it("starts once after the mode, the view and the threading were changed while stopped", async () => {
+        // A restart effect compared against refs it updated only while running,
+        // so a change made while stopped fired at the next Start: the run was
+        // stopped as soon as it began and started again. On iOS the aborted run
+        // had counted a frame and was submitted (sessions 20 and 22, 2026-10-29).
+        await mount();
+        fireEvent.click(screen.getByText("hand"));
+        fireEvent.click(screen.getByRole("switch", { name: "Inferenz im Web Worker" }));
+        fireEvent.click(screen.getByText("Filters"));
+        await start();
+        detectedFrame();
+        await act(async () => {});
+
+        expect(camera.start).toHaveBeenCalledTimes(1);
+        expect(createEngine).toHaveBeenCalledTimes(1);
+        expect(engine.close).not.toHaveBeenCalled();
+        expect(submitTrackingSession).not.toHaveBeenCalled();
+        expect(screen.getByText("Tracking aktiv")).toBeTruthy();
+    });
+
     it("counts a detected frame, a busy one and an engine error, then submits on Stop", async () => {
         await mount();
         await start();

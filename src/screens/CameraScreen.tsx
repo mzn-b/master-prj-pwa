@@ -518,25 +518,11 @@ export function CameraScreen() {
         }
     }, [dynamicInferenceEnabled]);
 
-    // Restart tracking when mode or appMode changes while running
-    const prevModeRef = useRef(mode);
-    const prevAppModeRef = useRef<AppMode>('landmarks');
-    const prevThreadingRef = useRef<InferenceThreading>(threading);
-    useEffect(() => {
-        if (!isRunning) return;
-        if (
-            prevModeRef.current === mode &&
-            prevAppModeRef.current === appMode &&
-            prevThreadingRef.current === threading
-        ) return;
-        prevModeRef.current = mode;
-        prevAppModeRef.current = appMode;
-        prevThreadingRef.current = threading;
-        (async () => {
-            await stop();
-            await start();
-        })().catch(() => {});
-    }, [isRunning, mode, appMode, threading, start, stop]);
+    // No restart on a mode, view or threading change: all three controls are
+    // locked while running, so there is nothing to restart for. The effect that
+    // did this compared against refs updated only while running, so a change
+    // made while stopped fired at the next Start and aborted the run it had just
+    // begun, submitting it if a frame had been counted (2026-10-29).
 
     const status = isUploading
         ? "Sende Daten…"

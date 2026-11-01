@@ -203,6 +203,12 @@ export class PerformanceTracker {
     /** NF3 — performance.now() of the first frame that produced a detection. */
     private firstDetectionAt: number | undefined;
     /**
+     * Whether this window began with start(), i.e. with the camera and the
+     * models starting. NF3's time to first detection covers that start-up; a
+     * window opened by a filter toggle has none (2026-10-29), as on native.
+     */
+    private windowIncludesStartup = false;
+    /**
      * NF4 — the conditions this session ran under. Without them two rows that
      * differ only in capture resolution or threading model are indistinguishable
      * in the dataset. The native app records the same four.
@@ -286,6 +292,7 @@ export class PerformanceTracker {
 
     start(): void {
         this.startTime = performance.now();
+        this.windowIncludesStartup = true;
         // No interval before the first frame: the gap from Start to the first
         // processed frame is camera and model start-up, not a frame interval.
         // NaN fails the `frameTime > 0` check below, so the first frame only
@@ -342,10 +349,12 @@ export class PerformanceTracker {
         // series, the drop counts by cause and the detection-quality sums; the
         // hand-written subset this replaced let those run on into the next
         // session (thesis audit, 2026-10-28). Unlike start(), it also forgets
-        // the model load time, which belongs to the window in which the models
-        // were loaded, as on native.
+        // the model load time and reports no time to first detection, which
+        // belong to the window in which the camera and the models started, as
+        // on native.
         this.start();
         this.modelLoadTimeMs = undefined;
+        this.windowIncludesStartup = false;
     }
 
     setModelLoadTime(timeMs: number): void {
@@ -542,6 +551,9 @@ export class PerformanceTracker {
             this.trackingLostCount++;
             this.trackingLostTime = now;
             this.currentConsecutiveLoss = 1;
+            // A one-frame loss is a streak of one, as on native; updating the
+            // maximum only from the second lost frame left it absent.
+            this.consecutiveTrackingLossMax = Math.max(this.consecutiveTrackingLossMax, 1);
         } else if (!this.lastTrackingValid && hasTracking && this.trackingLostTime > 0) {
             // Recovered from tracking loss
             const recoveryTime = now - this.trackingLostTime;
@@ -689,7 +701,7 @@ export class PerformanceTracker {
             smoothingEnabled: this.runConditions.smoothingEnabled,
             dynamicInferenceEnabled: this.runConditions.dynamicInferenceEnabled,
             gpuDelegateEnabled: this.runConditions.gpuDelegateEnabled,
-            timeToFirstDetectionMs: this.firstDetectionAt !== undefined
+            timeToFirstDetectionMs: this.windowIncludesStartup && this.firstDetectionAt !== undefined
                 ? Math.round((this.firstDetectionAt - this.startTime) * 10) / 10
                 : undefined,
 

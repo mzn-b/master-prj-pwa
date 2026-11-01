@@ -102,6 +102,36 @@ describe("PerformanceTracker", () => {
         expect(t.getMetrics().consecutiveTrackingLossMax!).toBeGreaterThanOrEqual(4);
     });
 
+    it("counts a loss of a single frame as a streak of one, as native does", () => {
+        // The first lost frame started the streak without updating the maximum,
+        // so a one-frame loss counted in trackingLostCount but left this absent
+        // (session 76, 2026-11-01). Native reports 1.
+        const t = new PerformanceTracker();
+        t.start();
+        runFrames(t, 3, 33, true);
+        runFrames(t, 1, 33, false);
+        runFrames(t, 3, 33, true);
+        const m = t.getMetrics();
+        expect(m.trackingLostCount).toBe(1);
+        expect(m.consecutiveTrackingLossMax).toBe(1);
+    });
+
+    it("reports no time to first detection for a window opened by a filter toggle", () => {
+        // It spans camera and model start-up, and a toggle starts neither: the
+        // window after one reported ~110 ms, the wait for the next frame
+        // (sessions 45 and 50, 2026-10-29).
+        const t = new PerformanceTracker();
+        t.start();
+        runFrames(t, 3, 33, true);
+        expect(t.getMetrics().timeToFirstDetectionMs).toBeGreaterThan(0);
+        t.reset();
+        runFrames(t, 3, 33, true);
+        expect(t.getMetrics().timeToFirstDetectionMs).toBeUndefined();
+        t.start();
+        runFrames(t, 3, 33, true);
+        expect(t.getMetrics().timeToFirstDetectionMs).toBeGreaterThan(0);
+    });
+
     it("averages detections per frame", () => {
         const t = new PerformanceTracker();
         t.start();

@@ -466,4 +466,20 @@ describe("CameraScreen, survey build", () => {
         await stop();
         expect(submitted()[0].filters).toEqual([]);
     });
+
+    it("runs without the adaptive inference governor (F15)", async () => {
+        // Decided 2026-11-01: on the Pixel 7 the governor's 33 ms target is out
+        // of reach, so it raised the frame-skip divider to its cap of 10 within a
+        // 60-second run (sessions 181-184).
+        await mount();
+        await start();
+        detectedFrame();
+        await stop();
+        expect(submitted()[0].metrics).toMatchObject({
+            dynamicInferenceEnabled: false,
+            smoothingEnabled: true,
+            gpuDelegateEnabled: true,
+            inferenceThreading: "main",
+        });
+    });
 });

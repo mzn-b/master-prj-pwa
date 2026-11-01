@@ -58,7 +58,13 @@ export function CameraScreen() {
     const [isCheckingDevice, setIsCheckingDevice] = useState(true);
 
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
-    const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled);
+    // F15 is off in the survey build (decided 2026-11-01): on the Pixel 7 the
+    // governor's 33 ms target is out of reach, so it raised the frame-skip divider
+    // to its cap within a 60-second run, and a run's frame rate came to depend on
+    // how long it lasted. The full build keeps the default, and the switch.
+    const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(
+        !SURVEY_BUILD && DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled,
+    );
     /**
      * Requests the MediaPipe GPU delegate. Default on, matching how every
      * session so far was recorded.

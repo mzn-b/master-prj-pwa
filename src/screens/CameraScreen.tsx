@@ -27,6 +27,7 @@ import {useCamera} from "../hooks";
 import {viewGeometryFromVideo} from "../render/coordinates";
 import type {ActiveFilters, AppMode, FilterId} from "../filters/types";
 import {
+    ALL_FILTERS,
     DEFAULT_ACTIVE_FILTERS,
     FILTER_IDS,
     FILTER_LABELS,
@@ -264,12 +265,15 @@ export function CameraScreen() {
      * selection left behind in landmarks mode is invisible but still submitted.
      * Clearing keeps the state honest; submittedFilters() keeps the report
      * honest even when it is not.
+     *
+     * The survey build offers no selection: its filter view is the study's
+     * filter condition, all three filters (thesis §6.1.2).
      */
     const handleAppMode = useCallback(
         (next: AppMode) => {
             if (isRunning) return;
             setAppMode(next);
-            setActiveFilters(DEFAULT_ACTIVE_FILTERS);
+            setActiveFilters(SURVEY_BUILD && next === "filters" ? ALL_FILTERS : DEFAULT_ACTIVE_FILTERS);
             setFilterError(null);
         },
         [isRunning],
@@ -695,7 +699,7 @@ export function CameraScreen() {
                             ))}
                         </div>
                     ) : (
-                        <div style={s.row}>
+                        !SURVEY_BUILD && <div style={s.row}>
                             {FILTER_IDS.map(id => (
                                 <button
                                     key={id}

@@ -4,8 +4,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 afterEach(cleanup);
 
 /**
- * In the survey build participants hold the phone and the operator selects the
- * view and the filters; nothing else may be changeable. Every run must use the
+ * In the survey build participants hold the phone and the operator selects one
+ * of the study's two conditions, the landmark view or the filter view with all
+ * three filters (see CameraScreen.session.test.tsx); nothing else may be
+ * changeable. Every run must use the
  * study settings (thesis §6.1.2): combined tracking, smoothing, the adaptive
  * inference rate and the GPU delegate on, inference on the main thread. Those
  * are the defaults, so hiding the controls fixes them there.

@@ -87,7 +87,13 @@ vi.mock("../../tracking/TrackingConfig", async importOriginal => ({
     checkDeviceCapabilities: () => deviceCheck(),
 }));
 
-vi.mock("../../config/surveyBuild", () => ({ SURVEY_BUILD: false }));
+/** The full build unless a test switches it; read on every render. */
+const survey = vi.hoisted(() => ({ build: false }));
+vi.mock("../../config/surveyBuild", () => ({
+    get SURVEY_BUILD() {
+        return survey.build;
+    },
+}));
 
 import { CameraScreen } from "../CameraScreen";
 
@@ -425,5 +431,39 @@ describe("CameraScreen filters", () => {
         await stop();
         fireEvent.click(screen.getByText("Landmarks"));
         expect(screen.queryByText(/Filter-Fehler/)).toBeNull();
+    });
+});
+
+/**
+ * The survey build runs the study's two conditions (thesis §6.1.2, decided
+ * 2026-11-01): the landmark view, or the filter view with all three filters and
+ * no selection offered.
+ */
+describe("CameraScreen, survey build", () => {
+    beforeEach(() => {
+        survey.build = true;
+    });
+    afterEach(() => {
+        survey.build = false;
+    });
+
+    it("draws all three filters in the filter view and offers no filter buttons", async () => {
+        await mount();
+        fireEvent.click(screen.getByText("Filters"));
+        for (const label of ["Crown", "Glasses", "Sparkles"]) expect(screen.queryByText(label)).toBeNull();
+        await start();
+        detectedFrame();
+        await stop();
+        expect(submitted()[0].filters).toEqual(["crown", "glasses", "sparkles"]);
+    });
+
+    it("draws no filter in the landmark view, also after the filter view", async () => {
+        await mount();
+        fireEvent.click(screen.getByText("Filters"));
+        fireEvent.click(screen.getByText("Landmarks"));
+        await start();
+        detectedFrame();
+        await stop();
+        expect(submitted()[0].filters).toEqual([]);
     });
 });

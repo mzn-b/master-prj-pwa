@@ -421,8 +421,10 @@ export function CameraScreen() {
              *
              * F15 is met here rather than by a frame-skip governor (removed
              * 2026-11-02): a frame that arrives while inference is still running
-             * is dropped, so the inference rate follows what the device
-             * sustains. The governor could only lower that rate, because skipping
+             * is not processed, and the next inference takes the newest frame, so
+             * the inference rate follows what the device sustains. On the main
+             * thread the callback cannot run during inference; the worker engine
+             * holds the newest frame and sends it when it is free. The governor could only lower that rate, because skipping
              * frames makes inference less frequent, not faster. The skip divider
              * is therefore always 1, and it is still recorded so the submitted
              * columns keep their meaning (avgFrameSkip 1, droppedFramesGovernor 0).
@@ -437,13 +439,14 @@ export function CameraScreen() {
 
                 const outcome = eng.submit(v, performance.now(), effectiveMode);
                 if (outcome.status === "busy" || outcome.status === "skipped") {
-                    // Busy: inference is behind, so the frame is discarded rather
-                    // than queued. Skipped: the timestamp had not advanced, so
-                    // MediaPipe ran nothing. Both are dropped frames, and the
-                    // native app counts the same two events.
+                    // Busy: inference is behind, so a frame was discarded — on
+                    // the worker engine the held frame this one replaced.
+                    // Skipped: the timestamp had not advanced, so MediaPipe ran
+                    // nothing. Both are dropped frames, and the native app counts
+                    // the same two events.
                     pt?.recordDroppedFrame("busy");
                 }
-                // "done" and "scheduled" are accounted for by onResult.
+                // "done", "scheduled" and "queued" are accounted for by onResult.
             };
 
             frameCallbackRef.current = subscribeToVideoFrames(video, onCameraFrame);

@@ -153,15 +153,137 @@ describe("worker engine", () => {
         );
     });
 
-    it("sends one frame at a time and reports the rest as busy", async () => {
+    it("sends one frame at a time and holds the one that arrives meanwhile", async () => {
         const { engine, worker } = await workerEngine();
         expect(engine.submit(video, 10, "combined")).toEqual({ status: "scheduled" });
-        expect(engine.submit(video, 20, "combined")).toEqual({ status: "busy" });
+        expect(engine.submit(video, 20, "combined")).toEqual({ status: "queued" });
         await flush();
+        expect(worker.posted).toHaveLength(2);
         const detect = worker.posted[1];
         expect(detect.message).toMatchObject({ type: "detect", timestampMs: 10, mode: "combined", seq: 1 });
         // The bitmap is transferred, not copied.
         expect(detect.transfer).toEqual([(detect.message as { bitmap: unknown }).bitmap]);
+    });
+
+    it("sends the held frame as soon as the worker is free, without waiting for the next one", async () => {
+        const { engine, worker } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        engine.submit(video, 20, "combined");
+        await flush();
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        expect(worker.posted).toHaveLength(3);
+        expect(worker.posted[2].message).toMatchObject({ type: "detect", timestampMs: 20, seq: 2 });
+    });
+
+    it("keeps only the newest held frame and reports each one it replaces as busy", async () => {
+        const { engine, worker } = await workerEngine();
+        const held = bitmap();
+        engine.submit(video, 10, "combined");
+        vi.mocked(createImageBitmap).mockResolvedValueOnce(held as never);
+        expect(engine.submit(video, 20, "combined")).toEqual({ status: "queued" });
+        await flush();
+        expect(engine.submit(video, 30, "combined")).toEqual({ status: "busy" });
+        await flush();
+        expect(held.close).toHaveBeenCalled(); // superseded: released, never sent
+
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        expect(worker.posted.map(p => (p.message as { timestampMs?: number }).timestampMs)).toEqual([
+            undefined,
+            10,
+            30,
+        ]);
+    });
+
+    it("releases a superseded frame whose capture was still running", async () => {
+        const { engine } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        await flush();
+        let finishCapture: (b: unknown) => void = () => {};
+        vi.mocked(createImageBitmap).mockReturnValueOnce(
+            new Promise(resolve => (finishCapture = resolve)) as never,
+        );
+        engine.submit(video, 20, "combined");
+        expect(engine.submit(video, 30, "combined")).toEqual({ status: "busy" });
+        const late = bitmap();
+        finishCapture(late);
+        await flush();
+        expect(late.close).toHaveBeenCalled();
+    });
+
+    it("sends a held frame whose capture finishes after the worker became free", async () => {
+        const { engine, worker } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        await flush();
+        let finishCapture: (b: unknown) => void = () => {};
+        vi.mocked(createImageBitmap).mockReturnValueOnce(
+            new Promise(resolve => (finishCapture = resolve)) as never,
+        );
+        engine.submit(video, 20, "combined");
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        expect(worker.posted).toHaveLength(2);
+        finishCapture(bitmap());
+        await flush();
+        expect(worker.posted[2].message).toMatchObject({ type: "detect", timestampMs: 20, seq: 2 });
+    });
+
+    it("measures a held frame from its capture, not from when it began to wait", async () => {
+        let now = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => now);
+        const { engine, worker, o } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        await flush();
+
+        now = 10;
+        let finishCapture: (b: unknown) => void = () => {};
+        vi.mocked(createImageBitmap).mockReturnValueOnce(
+            new Promise(resolve => (finishCapture = resolve)) as never,
+        );
+        engine.submit(video, 20, "combined");
+        now = 15; // the held frame's capture took 5 ms
+        finishCapture(bitmap());
+        await flush();
+
+        now = 50;
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        now = 80;
+        worker.reply({ type: "result", seq: 2, dto: dto(20), rawFaceCount: 1, rawHandCount: 0 });
+
+        expect(o.onResult.mock.calls.map(call => call[0].inferenceMs)).toEqual([50, 35]);
+        vi.mocked(performance.now).mockRestore();
+    });
+
+    it("sends the held frame after a detection error too", async () => {
+        const { engine, worker } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        engine.submit(video, 20, "combined");
+        await flush();
+        worker.reply({ type: "error", message: "Detection failed" });
+        expect(worker.posted[2].message).toMatchObject({ type: "detect", timestampMs: 20 });
+    });
+
+    it("frees the slot when a held frame cannot be captured", async () => {
+        const { engine, worker } = await workerEngine();
+        engine.submit(video, 10, "combined");
+        await flush();
+        vi.mocked(createImageBitmap).mockRejectedValueOnce(new Error("video gone"));
+        engine.submit(video, 20, "combined");
+        await flush();
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        expect(worker.posted).toHaveLength(2);
+        expect(engine.submit(video, 30, "combined")).toEqual({ status: "scheduled" });
+    });
+
+    it("releases a held frame on close instead of sending it", async () => {
+        const { engine, worker } = await workerEngine();
+        const held = bitmap();
+        engine.submit(video, 10, "combined");
+        vi.mocked(createImageBitmap).mockResolvedValueOnce(held as never);
+        engine.submit(video, 20, "combined");
+        await flush();
+        engine.close();
+        worker.reply({ type: "result", seq: 1, dto: dto(10), rawFaceCount: 1, rawHandCount: 0 });
+        expect(held.close).toHaveBeenCalled();
+        expect(worker.posted.map(p => (p.message as { type: string }).type)).toEqual(["init", "detect", "close"]);
     });
 
     it("skips a frame whose timestamp has not advanced, before copying it", async () => {

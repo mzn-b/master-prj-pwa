@@ -24,6 +24,7 @@ import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
 // Imported from the module itself: the tests replace "../hooks" with a stub camera.
 import {negotiatedFrameRate} from "../hooks/useCamera";
+import {useAutoStop} from "../hooks/useAutoStop";
 import {viewGeometryFromVideo} from "../render/coordinates";
 import type {ActiveFilters, AppMode, FilterId} from "../filters/types";
 import {
@@ -228,6 +229,10 @@ export function CameraScreen() {
             }
         }
     }, [camera, recordDrawnBackend]);
+
+    // The survey build ends every participant run after 60 s by itself, so run
+    // length does not depend on the operator's reaction (thesis §6.5.3).
+    useAutoStop(isRunning, SURVEY_BUILD, stop);
 
     /**
      * Submit current session metrics and reset the tracker, then toggle the filter.

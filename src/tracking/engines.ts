@@ -176,8 +176,9 @@ class WorkerEngine implements TrackingEngine {
 
             // End-to-end, measured on the thread that asked for it: bitmap
             // capture, transfer, inference, and the result coming back. The
-            // native app's number spans the equivalent bridge crossing. Taken
-            // before sendHeld(), which starts the next frame's span.
+            // native app's span does NOT include its bridge crossing: it stops
+            // once the output is packed (thesis §6.4.1, declared asymmetries).
+            // Taken before sendHeld(), which starts the next frame's span.
             const inferenceMs = performance.now() - this.startedAt;
             this.inFlight = false;
             this.sendHeld();

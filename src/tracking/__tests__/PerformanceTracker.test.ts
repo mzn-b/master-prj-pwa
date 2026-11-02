@@ -277,6 +277,16 @@ describe("PerformanceTracker battery units", () => {
 describe("PerformanceTracker percentiles", () => {
     let t: PerformanceTracker;
 
+    /** Runs the F11 warm-up, whose frames stay out of the percentiles. */
+    const warmUp = (inferenceMs = 500) => {
+        for (let i = 0; i < WARMUP_FRAMES; i++) {
+            const start = t.recordFrameStart();
+            t.recordInferenceMs(inferenceMs);
+            vi.advanceTimersByTime(33);
+            t.recordFrameEnd(start, true);
+        }
+    };
+
     beforeEach(() => {
         vi.useFakeTimers();
         t = new PerformanceTracker();
@@ -284,8 +294,22 @@ describe("PerformanceTracker percentiles", () => {
     });
     afterEach(() => vi.useRealTimers());
 
+    it("leaves the warm-up frames out of the percentiles", () => {
+        warmUp(500);
+        for (let i = 0; i < 20; i++) {
+            const start = t.recordFrameStart();
+            t.recordInferenceMs(10);
+            vi.advanceTimersByTime(40);
+            t.recordFrameEnd(start, true);
+        }
+        const m = t.getMetrics();
+        expect(m.inferenceTimeP99Ms).toBe(10);
+        expect(m.frameIntervalP99Ms).toBe(40);
+    });
+
     it("reports a value that actually occurred, not an interpolation", () => {
         // Nearest rank on ten samples of 10..100 ms: p95 must be 100, not 95.
+        warmUp();
         for (let i = 1; i <= 10; i++) t.recordInferenceMs(i * 10);
         const m = t.getMetrics();
         expect(m.inferenceTimeP95Ms).toBeCloseTo(100, 1);
@@ -296,6 +320,7 @@ describe("PerformanceTracker percentiles", () => {
         // Slow frames early on must still show in the p99 after hundreds of
         // fast frames have pushed them out of the circular buffer — otherwise
         // the percentile describes the buffer rather than the run.
+        warmUp(10);
         for (let i = 0; i < 5; i++) t.recordInferenceMs(800);
         for (let i = 0; i < 300; i++) t.recordInferenceMs(10);
         expect(t.getMetrics().inferenceTimeP99Ms!).toBeGreaterThan(100);
@@ -319,7 +344,7 @@ describe("PerformanceTracker percentiles", () => {
         // Camera and model start-up sit between start() and the first frame;
         // counted as an interval it would become the session's worst frame.
         vi.advanceTimersByTime(2000);
-        for (let i = 0; i < 11; i++) {
+        for (let i = 0; i < WARMUP_FRAMES + 11; i++) {
             const start = t.recordFrameStart();
             vi.advanceTimersByTime(33);
             t.recordFrameEnd(start, true);

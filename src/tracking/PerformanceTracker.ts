@@ -506,13 +506,13 @@ export class PerformanceTracker {
     /**
      * NF4 — end-to-end: frame available to landmarks ready, including the video
      * texture upload into WASM and the conversion of the raw output into points.
-     * The native app brackets the same span, including its own image conversion,
-     * so the two numbers describe the same work.
+     * The native span starts when its module has the frame, so the camera
+     * library's colour conversion on Android falls outside it, and it ends when
+     * the output is packed, before the bridge back to JavaScript (thesis
+     * Table "declared asymmetries"; §6.4.1).
      */
     recordInferenceTime(startTime: number): void {
-        const duration = performance.now() - startTime;
-        this.inferenceTimes.push(duration);
-        this.inferenceSeries.push(duration);
+        this.recordInferenceMs(performance.now() - startTime);
     }
 
     /**
@@ -523,7 +523,11 @@ export class PerformanceTracker {
      */
     recordInferenceMs(durationMs: number): void {
         this.inferenceTimes.push(durationMs);
-        this.inferenceSeries.push(durationMs);
+        // F11: the warm-up frames (model building, the first detections) stay
+        // out of the percentiles, as they stay out of min/max fps; since
+        // 3 Nov 2026, on both apps. This runs before recordFrameEnd() of the
+        // same frame, so warmupComplete is set from the 31st frame on.
+        if (this.warmupComplete) this.inferenceSeries.push(durationMs);
     }
 
     recordFrameEnd(frameStart: number, hasTracking: boolean): void {
@@ -541,9 +545,9 @@ export class PerformanceTracker {
 
         if (frameTime > 0) {
             this.frameTimes.push(frameTime);
-            this.frameIntervalSeries.push(frameTime);
 
             if (this.warmupComplete) {
+                this.frameIntervalSeries.push(frameTime);
                 const fps = 1000 / frameTime;
                 if (fps < this.minFps) this.minFps = fps;
                 if (fps > this.maxFps) this.maxFps = fps;

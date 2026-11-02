@@ -8,6 +8,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { projectNormalized, type ViewGeometry } from '../render/coordinates'
 import type { TrackingDTO } from '../domain/tracking.dto'
+import { nextStart, saveTiming } from './crownTiming'
 
 const FOREHEAD_TOP = 10
 /**
@@ -67,6 +68,13 @@ export class CrownFilter {
   /** When the compositor kick began; see the note at the render site. */
   private kickStartedAt = 0
 
+  // DIAGNOSTIC (diag/crown-timing): see crownTiming.ts.
+  private readonly createdAt = performance.now()
+  private readonly startIndex = nextStart()
+  private initMs?: number
+  private modelMs?: number
+  private timingSaved = false
+
   constructor(canvas: HTMLCanvasElement, onError?: (message: string) => void) {
     this.onError = onError
     this.canvas = canvas
@@ -84,6 +92,7 @@ export class CrownFilter {
     // frames of crown and nothing else.
     this.renderer.init().then(
       () => {
+        this.initMs = performance.now() - this.createdAt
         this.ready = true
         if (this.pendingSize) {
           this.resize(this.pendingSize.width, this.pendingSize.height)
@@ -144,6 +153,7 @@ export class CrownFilter {
         clipping.add(pivot)
         this.scene.add(clipping)
         this.loaded = true
+        this.modelMs = performance.now() - this.createdAt
       },
       undefined,
       (e: unknown) => {
@@ -257,7 +267,26 @@ export class CrownFilter {
     this.crown.rotation.set(pitch, yaw, roll)
     this.crown.scale.setScalar(scaleFactor)
 
+    const drawStart = this.timingSaved ? 0 : performance.now()
     this.renderer.render(this.scene, this.camera)
+    if (!this.timingSaved) {
+      const firstDrawMs = performance.now() - drawStart
+      this.timingSaved = true
+      saveTiming({
+        at: new Date().toISOString(),
+        launch: Math.round(performance.timeOrigin),
+        start: this.startIndex,
+        rendererMs: Math.round(this.initMs ?? -1),
+        modelMs: Math.round(this.modelMs ?? -1),
+        firstFrameAtMs: Math.round(drawStart - this.createdAt),
+        firstDrawMs: Math.round(firstDrawMs),
+        backend: this.backend(),
+        standalone:
+          window.matchMedia?.('(display-mode: standalone)').matches === true ||
+          (navigator as Navigator & { standalone?: boolean }).standalone === true,
+        userAgent: navigator.userAgent,
+      })
+    }
 
     // Kick Safari's compositor for the first two seconds.
     //

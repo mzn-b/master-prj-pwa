@@ -33,6 +33,7 @@ import {
     submittedFilters,
 } from "../filters/types";
 import {FilterOverlay, type FilterOverlayHandle} from "../filters/FilterOverlay";
+import {CrownTimingPanel} from "../ui/CrownTimingPanel";
 
 
 export function CameraScreen() {
@@ -626,6 +627,7 @@ export function CameraScreen() {
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
                     )}
                     <div style={s.buildStamp}>Build {APP_VERSION}{SURVEY_BUILD ? " (Studie)" : ""}</div>
+                    <CrownTimingPanel />
                     {warnings.map(w => (
                         <div key={w} style={s.warning}>
                             {w}

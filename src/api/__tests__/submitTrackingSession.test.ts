@@ -63,7 +63,8 @@ describe("submitTrackingSession", () => {
             deviceInfo: {
                 deviceModel: "iPhone",
                 osVersion: "iOS 18.7",
-                appVersion: APP_VERSION,
+                // Vitest runs in dev mode, so the stamp carries the dev marker.
+                appVersion: `${APP_VERSION}-dev`,
                 browserInfo: IPHONE,
             },
         });

@@ -103,7 +103,10 @@ function getDeviceInfo(): DeviceInfo {
         osVersion,
         // Stamped at build time so a session can be traced back to the code
         // that produced it — see src/config/buildInfo.ts.
-        appVersion: APP_VERSION,
+        // The dev server marks itself, so the analysis, which accepts only the
+        // study builds' exact stamps, can never take its sessions for
+        // production data (thesis §6.3.1).
+        appVersion: import.meta.env.DEV ? `${APP_VERSION}-dev` : APP_VERSION,
         screenWidth: window.screen.width,
         screenHeight: window.screen.height,
         browserInfo: userAgent,

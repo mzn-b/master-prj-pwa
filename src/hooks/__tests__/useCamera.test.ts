@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { CAPTURE_HEIGHT, CAPTURE_WIDTH, useCamera } from "../useCamera";
+import { CAPTURE_FPS, CAPTURE_HEIGHT, CAPTURE_WIDTH, negotiatedFrameRate, useCamera } from "../useCamera";
 
 /**
  * The capture constraints are half of NF4: both apps must analyse frames of
@@ -44,7 +44,12 @@ describe("useCamera", () => {
 
         expect(started).toBe(true);
         expect(getUserMedia).toHaveBeenCalledWith({
-            video: { facingMode: "user", width: { exact: CAPTURE_WIDTH }, height: { exact: CAPTURE_HEIGHT } },
+            video: {
+                facingMode: "user",
+                width: { exact: CAPTURE_WIDTH },
+                height: { exact: CAPTURE_HEIGHT },
+                frameRate: { ideal: CAPTURE_FPS, max: CAPTURE_FPS },
+            },
             audio: false,
         });
         expect(video.srcObject).not.toBeNull();
@@ -63,7 +68,12 @@ describe("useCamera", () => {
         });
 
         expect(getUserMedia.mock.calls[1][0]).toEqual({
-            video: { facingMode: "user", width: { ideal: CAPTURE_WIDTH }, height: { ideal: CAPTURE_HEIGHT } },
+            video: {
+                facingMode: "user",
+                width: { ideal: CAPTURE_WIDTH },
+                height: { ideal: CAPTURE_HEIGHT },
+                frameRate: { ideal: CAPTURE_FPS },
+            },
             audio: false,
         });
         expect(result.current.isActive).toBe(true);
@@ -118,5 +128,15 @@ describe("useCamera", () => {
         expect(video.pause).toHaveBeenCalled();
         expect(video.srcObject).toBeNull();
         expect(result.current.isActive).toBe(false);
+    });
+
+    it("reports the frame rate the camera track settled on", () => {
+        const track = { getSettings: () => ({ frameRate: 29.97 }) };
+        class FakeStream { getVideoTracks() { return [track]; } }
+        vi.stubGlobal("MediaStream", FakeStream);
+        const video = { srcObject: new FakeStream() } as unknown as HTMLVideoElement;
+        expect(negotiatedFrameRate(video)).toBe(30);
+        expect(negotiatedFrameRate({ srcObject: null } as unknown as HTMLVideoElement)).toBeUndefined();
+        vi.unstubAllGlobals();
     });
 });

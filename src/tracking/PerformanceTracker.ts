@@ -216,6 +216,7 @@ export class PerformanceTracker {
     private runConditions: {
         frameWidth?: number;
         frameHeight?: number;
+        cameraFps?: number;
         renderBackend?: string;
         inferenceThreading?: string;
         smoothingEnabled?: boolean;
@@ -368,6 +369,7 @@ export class PerformanceTracker {
     setRunConditions(conditions: {
         frameWidth?: number;
         frameHeight?: number;
+        cameraFps?: number;
         renderBackend?: string;
         inferenceThreading?: string;
         smoothingEnabled?: boolean;
@@ -592,8 +594,10 @@ export class PerformanceTracker {
         const memoryUsageMB = perfMemory ? perfMemory.usedJSHeapSize / (1024 * 1024) : undefined;
         const heapLimitMB = perfMemory ? perfMemory.jsHeapSizeLimit / (1024 * 1024) : undefined;
 
-        // Network metrics
-        const connection = (navigator as NavigatorWithConnection).connection;
+        // The connection type and speed (networkType, networkDownlinkMbps,
+        // networkRttMs) were sent until consent version 1.3. No analysis uses
+        // them and the upload happens after the run, so they are no longer
+        // collected (data minimisation, Art. 5(1)(c) GDPR).
 
         // Track peak memory
         if (memoryUsageMB && memoryUsageMB > this.peakMemoryUsageMB) {
@@ -667,9 +671,6 @@ export class PerformanceTracker {
             batteryLevelStart: this.batteryLevelStart,
             batteryLevelEnd: batteryLevel,
             batteryDeltaPercent,
-            networkType: connection?.effectiveType,
-            networkDownlinkMbps: connection?.downlink,
-            networkRttMs: connection?.rtt,
             // Detection metrics
             facesDetectedAvg,
             handsDetectedAvg,
@@ -698,6 +699,7 @@ export class PerformanceTracker {
             // Run conditions
             frameWidth: this.runConditions.frameWidth,
             frameHeight: this.runConditions.frameHeight,
+            cameraFps: this.runConditions.cameraFps,
             renderBackend: this.runConditions.renderBackend,
             inferenceThreading: this.runConditions.inferenceThreading,
             smoothingEnabled: this.runConditions.smoothingEnabled,
@@ -765,14 +767,6 @@ interface PerformanceWithMemory extends Performance {
         usedJSHeapSize: number;
         totalJSHeapSize: number;
         jsHeapSizeLimit: number;
-    };
-}
-
-interface NavigatorWithConnection extends Navigator {
-    connection?: {
-        effectiveType?: string;
-        downlink?: number;
-        rtt?: number;
     };
 }
 

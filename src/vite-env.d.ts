@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
     /** "true" in the survey build; see src/config/surveyBuild.ts. */
     readonly VITE_SURVEY_BUILD?: string;
+    /** Write token for POST /sessions (backend StudyAccessFilter). */
+    readonly VITE_STUDY_WRITE_TOKEN?: string;
 }
 
 declare module "virtual:pwa-register" {

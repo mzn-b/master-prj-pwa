@@ -2,6 +2,12 @@ import type { PerformanceMetricsDTO, TrackingMode } from "../domain/tracking.dto
 import {APP_VERSION} from "../config/buildInfo";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+/**
+ * Write token the backend requires on POST /sessions (header X-Study-Token).
+ * Set as VITE_STUDY_WRITE_TOKEN in the build environment (Vercel, or a local
+ * .env file, both outside git); vite.config.ts refuses a survey build without it.
+ */
+const STUDY_WRITE_TOKEN = import.meta.env.VITE_STUDY_WRITE_TOKEN ?? "";
 
 export type Platform = "IOS_PWA" | "ANDROID_PWA" | "IOS_NATIVE" | "ANDROID_NATIVE";
 
@@ -135,6 +141,7 @@ export async function submitTrackingSession(
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                "X-Study-Token": STUDY_WRITE_TOKEN,
             },
             body: JSON.stringify(request),
         });

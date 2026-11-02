@@ -22,6 +22,8 @@ import {APP_VERSION} from "../config/buildInfo";
 import {SURVEY_BUILD} from "../config/surveyBuild";
 import {useRenderer} from "../rendering";
 import {useCamera} from "../hooks";
+// Imported from the module itself: the tests replace "../hooks" with a stub camera.
+import {negotiatedFrameRate} from "../hooks/useCamera";
 import {viewGeometryFromVideo} from "../render/coordinates";
 import type {ActiveFilters, AppMode, FilterId} from "../filters/types";
 import {
@@ -358,6 +360,7 @@ export function CameraScreen() {
                 renderBackend: capabilitiesRef.current?.backend,
                 frameWidth: video.videoWidth || undefined,
                 frameHeight: video.videoHeight || undefined,
+                cameraFps: negotiatedFrameRate(video),
                 // F9 moves the numbers, so it is submitted with them. Captured
                 // at start: the switch is disabled mid-run. F15's governor was
                 // removed (see onCameraFrame); the column stays, always false.
@@ -398,6 +401,7 @@ export function CameraScreen() {
                         performanceTrackerRef.current.setRunConditions({
                             frameWidth: v.videoWidth,
                             frameHeight: v.videoHeight,
+                            cameraFps: negotiatedFrameRate(v),
                         });
                     }
                     const metrics = performanceTrackerRef.current.getMetrics();

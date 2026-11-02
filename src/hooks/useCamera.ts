@@ -25,6 +25,22 @@ import { useRef, useCallback, useState } from "react";
  */
 export const CAPTURE_WIDTH = 1280;
 export const CAPTURE_HEIGHT = 720;
+/**
+ * The camera rate both apps request (the native app with VisionCamera's
+ * `{fps: 30}` constraint). Left to itself the camera may run faster or, in dim
+ * light, slower, and the rate bounds how many frames there are to process
+ * (thesis §6.3). `max` keeps it from running above; what it settled on is
+ * submitted with the session as cameraFps.
+ */
+export const CAPTURE_FPS = 30;
+
+/** The frame rate the browser negotiated for the video's camera track. */
+export function negotiatedFrameRate(video: HTMLVideoElement): number | undefined {
+    const stream = video.srcObject;
+    if (typeof MediaStream === "undefined" || !(stream instanceof MediaStream)) return undefined;
+    const rate = stream.getVideoTracks()[0]?.getSettings().frameRate;
+    return typeof rate === "number" && rate > 0 ? Math.round(rate * 10) / 10 : undefined;
+}
 
 async function requestStream(): Promise<MediaStream> {
     const base: MediaTrackConstraints = { facingMode: "user" };
@@ -34,6 +50,7 @@ async function requestStream(): Promise<MediaStream> {
                 ...base,
                 width: { exact: CAPTURE_WIDTH },
                 height: { exact: CAPTURE_HEIGHT },
+                frameRate: { ideal: CAPTURE_FPS, max: CAPTURE_FPS },
             },
             audio: false,
         });
@@ -48,6 +65,8 @@ async function requestStream(): Promise<MediaStream> {
                 ...base,
                 width: { ideal: CAPTURE_WIDTH },
                 height: { ideal: CAPTURE_HEIGHT },
+                // Only an ideal here: the fallback must not fail on the rate.
+                frameRate: { ideal: CAPTURE_FPS },
             },
             audio: false,
         });

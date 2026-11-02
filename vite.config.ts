@@ -80,11 +80,28 @@ export default defineConfig({
     plugins: [
         react(),
         basicSsl(),
+        {
+            // The backend rejects sessions without the write token, so a survey
+            // build without it would run normally and lose every measurement.
+            name: "require-study-write-token",
+            apply: "build",
+            configResolved(config) {
+                if (config.env.VITE_SURVEY_BUILD === "true" && !config.env.VITE_STUDY_WRITE_TOKEN) {
+                    throw new Error(
+                        "Survey build without VITE_STUDY_WRITE_TOKEN: the backend would reject every session. " +
+                        "Set it in the build environment (Vercel or a local .env, never in git).",
+                    );
+                }
+            },
+        },
         VitePWA({
             registerType: "autoUpdate",
             manifest: {
-                name: "Tracking PWA",
-                short_name: "Tracking",
+                // Neutral, and the same as the native app's display name and icon,
+                // so the home screen and the launch screen do not tell participants
+                // which implementation is which (thesis §6.5.1).
+                name: "AR-Studie",
+                short_name: "AR-Studie",
                 display: "standalone",
                 start_url: "/",
                 scope: "/",
@@ -100,6 +117,7 @@ export default defineConfig({
             includeAssets: [
                 "pwa-192.png",
                 "pwa-512.png",
+                "apple-touch-icon.png",
                 "favicon.svg",
 
                 // ✅ unsere MediaPipe Assets aus public/

@@ -7,8 +7,7 @@ import type { TrackingDTO } from "../../domain/tracking.dto";
  * A session from Start to Stop, as the data sees it: which engine is built
  * with which settings, how camera frames, results and drops are counted, what
  * is drawn, and what is submitted — including the session boundary a filter
- * toggle creates. The tracker, smoother and inference-rate governor are the
- * real ones; the camera, the engine, the frame source, the renderers and the
+ * toggle creates. The tracker and the smoother are the real ones; the camera, the engine, the frame source, the renderers and the
  * upload are stand-ins, so no model runs.
  */
 const camera = { start: vi.fn(async () => true), stop: vi.fn() };
@@ -190,7 +189,7 @@ describe("CameraScreen session", () => {
     it("builds the engine with the settings switched before Start, and submits them", async () => {
         await mount();
         fireEvent.click(screen.getByText("hand"));
-        for (const label of ["F9: Glättung (One Euro)", "F15: Dynamische Inferenzrate", "GPU-Delegate", "Inferenz im Web Worker"]) {
+        for (const label of ["F9: Glättung (One Euro)", "GPU-Delegate", "Inferenz im Web Worker"]) {
             fireEvent.click(screen.getByRole("switch", { name: label }));
         }
         await start();
@@ -308,18 +307,19 @@ describe("CameraScreen session", () => {
         expect(frames).toHaveLength(1); // the loop re-arms itself
     });
 
-    it("skips frames the inference-rate governor holds back", async () => {
+    it("offers every camera frame to the engine: F15 is met by busy-dropping", async () => {
         await mount();
         await start();
-        // Slow inference makes the governor raise the skip; force it directly.
-        const governor = await import("../../tracking/TrackingConfig");
-        vi.spyOn(governor.DynamicInferenceController.prototype, "getCurrentFrameSkip").mockReturnValue(2);
-        act(() => onCameraFrame()); // frame 1 of every 2: held back
-        act(() => onCameraFrame()); // frame 2: submitted
-        expect(engine.submit).toHaveBeenCalledTimes(1);
-        detectedFrame();
+        // Slow inference used to make the removed governor hold frames back.
+        for (let i = 0; i < 3; i++) detectedFrame({ inferenceMs: 120 });
+        expect(engine.submit).toHaveBeenCalledTimes(3);
         await stop();
-        expect(submitted()[0].metrics).toMatchObject({ droppedFramesGovernor: 2, avgFrameSkip: 2 });
+        expect(submitted()[0].metrics).toMatchObject({
+            droppedFramesGovernor: 0,
+            avgFrameSkip: 1,
+            maxFrameSkip: 1,
+            dynamicInferenceEnabled: false,
+        });
     });
 
     it("ignores camera frames before the video has data", async () => {
@@ -467,10 +467,7 @@ describe("CameraScreen, survey build", () => {
         expect(submitted()[0].filters).toEqual([]);
     });
 
-    it("runs without the adaptive inference governor (F15)", async () => {
-        // Decided 2026-11-01: on the Pixel 7 the governor's 33 ms target is out
-        // of reach, so it raised the frame-skip divider to its cap of 10 within a
-        // 60-second run (sessions 181-184).
+    it("runs with the study settings", async () => {
         await mount();
         await start();
         detectedFrame();

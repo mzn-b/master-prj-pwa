@@ -73,7 +73,7 @@ describe.skipIf(!available)("palette parity with the native app", () => {
 });
 
 describe.skipIf(!hud)("metrics card parity", () => {
-    it("shows the same ten rows, in the same order, with the same labels", () => {
+    it("shows the same nine rows, in the same order, with the same labels", () => {
         // The HUD is what a participant looks at while forming an impression of
         // "how fast this feels", so a richer or differently-ordered HUD on one
         // side is a confound.
@@ -87,7 +87,6 @@ describe.skipIf(!hud)("metrics card parity", () => {
             "CPU",
             "Thermal",
             "Akku",
-            "Frame-Skip",
             "Warmup",
         ]);
 

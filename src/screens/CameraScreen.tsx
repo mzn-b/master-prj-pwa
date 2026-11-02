@@ -12,9 +12,7 @@ import {DEFAULT_SMOOTHING_CONFIG, LandmarkSmoother} from "../tracking/LandmarkSm
 import {
     canStartTracking,
     checkDeviceCapabilities,
-    DEFAULT_DYNAMIC_INFERENCE_CONFIG,
     type DeviceCapabilities,
-    DynamicInferenceController,
 } from "../tracking/TrackingConfig";
 import {PerformanceOverlay} from "../ui/PerformanceOverlay";
 import {color, s} from "../ui/theme";
@@ -58,13 +56,6 @@ export function CameraScreen() {
     const [isCheckingDevice, setIsCheckingDevice] = useState(true);
 
     const [smoothingEnabled, setSmoothingEnabled] = useState(DEFAULT_SMOOTHING_CONFIG.enabled);
-    // F15 is off in the survey build (decided 2026-11-01): on the Pixel 7 the
-    // governor's 33 ms target is out of reach, so it raised the frame-skip divider
-    // to its cap within a 60-second run, and a run's frame rate came to depend on
-    // how long it lasted. The full build keeps the default, and the switch.
-    const [dynamicInferenceEnabled, setDynamicInferenceEnabled] = useState(
-        !SURVEY_BUILD && DEFAULT_DYNAMIC_INFERENCE_CONFIG.enabled,
-    );
     /**
      * Requests the MediaPipe GPU delegate. Default on, matching how every
      * session so far was recorded.
@@ -78,7 +69,6 @@ export function CameraScreen() {
      * hence disabled while running, like the threading toggle.
      */
     const [gpuDelegateEnabled, setGpuDelegateEnabled] = useState(true);
-    const [currentFrameSkip, setCurrentFrameSkip] = useState(1);
     const [showDebug, setShowDebug] = useState(false);
     /**
      * §3a — where MediaPipe runs. A runtime toggle rather than a build flag so a
@@ -103,9 +93,7 @@ export function CameraScreen() {
     const sessionModeRef = useRef<TrackingMode>(mode);
     const performanceTrackerRef = useRef<PerformanceTracker | null>(null);
     const smootherRef = useRef<LandmarkSmoother | null>(null);
-    const dynamicInferenceRef = useRef<DynamicInferenceController | null>(null);
     const metricsIntervalRef = useRef<number | null>(null);
-    const frameCountRef = useRef(0);
     /** Cancels the camera-frame callback, whichever mechanism provided it. */
     const frameCallbackRef = useRef<(() => void) | null>(null);
     /** Latest smoothed detection, drawn by the render loop. */
@@ -217,15 +205,12 @@ export function CameraScreen() {
         performanceTrackerRef.current = null;
         smootherRef.current?.reset();
         smootherRef.current = null;
-        dynamicInferenceRef.current?.reset();
-        dynamicInferenceRef.current = null;
 
         engineRef.current?.close();
         engineRef.current = null;
         latestSmoothedRef.current = null;
         camera.stop();
         setPerformanceMetrics(null);
-        frameCountRef.current = 0;
 
         if (finalMetrics && finalMetrics.frameCount > 0) {
             setIsUploading(true);
@@ -288,7 +273,6 @@ export function CameraScreen() {
     const start = useCallback(async () => {
         setError(null);
         setUploadStatus(null);
-        frameCountRef.current = 0;
 
         // Filter mode always uses combined so all filters are available without restart
         const effectiveMode: TrackingMode = appModeRef.current === 'filters' ? 'combined' : mode;
@@ -314,10 +298,6 @@ export function CameraScreen() {
             smootherRef.current = new LandmarkSmoother({
                 ...DEFAULT_SMOOTHING_CONFIG,
                 enabled: smoothingEnabled,
-            });
-            dynamicInferenceRef.current = new DynamicInferenceController({
-                ...DEFAULT_DYNAMIC_INFERENCE_CONFIG,
-                enabled: dynamicInferenceEnabled,
             });
 
             /**
@@ -378,10 +358,11 @@ export function CameraScreen() {
                 renderBackend: capabilitiesRef.current?.backend,
                 frameWidth: video.videoWidth || undefined,
                 frameHeight: video.videoHeight || undefined,
-                // F9/F15 — both move the numbers, so both are submitted with
-                // them. Captured at start: the switches are disabled mid-run.
+                // F9 moves the numbers, so it is submitted with them. Captured
+                // at start: the switch is disabled mid-run. F15's governor was
+                // removed (see onCameraFrame); the column stays, always false.
                 smoothingEnabled,
-                dynamicInferenceEnabled,
+                dynamicInferenceEnabled: false,
                 // The delegate *request*. `gpuDelegateActive` records what the
                 // engine reported building, which is unreliable on every arm, so
                 // it cannot identify a run made with the delegate off.
@@ -421,10 +402,6 @@ export function CameraScreen() {
                     }
                     const metrics = performanceTrackerRef.current.getMetrics();
                     setPerformanceMetrics(metrics);
-                    if (dynamicInferenceRef.current && metrics.avgInferenceTimeMs > 0) {
-                        dynamicInferenceRef.current.recordInferenceTime(metrics.avgInferenceTimeMs);
-                        setCurrentFrameSkip(dynamicInferenceRef.current.getCurrentFrameSkip());
-                    }
                 }
                 // F14 — only re-render the debug section when it's actually showing
                 if (showDebugRef.current) {
@@ -441,28 +418,22 @@ export function CameraScreen() {
              * the inferences on a fast device and inflating every measurement. The
              * native app gets exactly one callback per camera frame; this is the
              * browser's equivalent.
+             *
+             * F15 is met here rather than by a frame-skip governor (removed
+             * 2026-11-02): a frame that arrives while inference is still running
+             * is dropped, so the inference rate follows what the device
+             * sustains. The governor could only lower that rate, because skipping
+             * frames makes inference less frequent, not faster. The skip divider
+             * is therefore always 1, and it is still recorded so the submitted
+             * columns keep their meaning (avgFrameSkip 1, droppedFramesGovernor 0).
              */
             const onCameraFrame = () => {
                 const v = videoRef.current;
                 const pt = performanceTrackerRef.current;
-                const di = dynamicInferenceRef.current;
                 const eng = engineRef.current;
                 if (!v || !eng || v.readyState < 2) return;
 
-                frameCountRef.current++;
-
-                const frameSkip = di?.getCurrentFrameSkip() ?? 1;
-                // F15 — sampled here, before the skip check, so every camera
-                // frame contributes and the mean is time-weighted.
-                pt?.recordFrameSkip(frameSkip);
-                if (frameCountRef.current % frameSkip !== 0) {
-                    // F15 governor deliberately skipped this frame. It reached the
-                    // pipeline and produced no inference, which is what the
-                    // droppedFrames column measures — the native app counts the
-                    // same event.
-                    pt?.recordDroppedFrame("governor");
-                    return;
-                }
+                pt?.recordFrameSkip(1);
 
                 const outcome = eng.submit(v, performance.now(), effectiveMode);
                 if (outcome.status === "busy" || outcome.status === "skipped") {
@@ -514,19 +485,13 @@ export function CameraScreen() {
             setError(msg);
             await stop();
         }
-    }, [mode, smoothingEnabled, dynamicInferenceEnabled, gpuDelegateEnabled, threading, stop, renderOverlay, camera]);
+    }, [mode, smoothingEnabled, gpuDelegateEnabled, threading, stop, renderOverlay, camera]);
 
     useEffect(() => {
         if (smootherRef.current) {
             smootherRef.current.setConfig({...DEFAULT_SMOOTHING_CONFIG, enabled: smoothingEnabled});
         }
     }, [smoothingEnabled]);
-
-    useEffect(() => {
-        if (dynamicInferenceRef.current) {
-            dynamicInferenceRef.current.setConfig({enabled: dynamicInferenceEnabled});
-        }
-    }, [dynamicInferenceEnabled]);
 
     // No restart on a mode, view or threading change: all three controls are
     // locked while running, so there is nothing to restart for. The effect that
@@ -621,7 +586,6 @@ export function CameraScreen() {
                             visible={showPerformance}
                             debug={showDebug}
                             tracking={latestTracking}
-                            currentFrameSkip={currentFrameSkip}
                         />
                     )}
                 </div>
@@ -732,7 +696,6 @@ export function CameraScreen() {
                         either of which would tell a participant which one this is. */}
                     {(!SURVEY_BUILD || surveyUrl) && <div style={s.settingsCard}>
                         {!SURVEY_BUILD && toggle("F9: Glättung (One Euro)", smoothingEnabled, setSmoothingEnabled)}
-                        {!SURVEY_BUILD && toggle("F15: Dynamische Inferenzrate", dynamicInferenceEnabled, setDynamicInferenceEnabled)}
                         {!SURVEY_BUILD && toggle("GPU-Delegate", gpuDelegateEnabled, setGpuDelegateEnabled, isRunning)}
                         {!SURVEY_BUILD && toggle("Performance-HUD", showPerformance, setShowPerformance)}
                         {!SURVEY_BUILD && toggle("F14: Debug-HUD", showDebug, setShowDebug)}

@@ -15,7 +15,6 @@ interface Props {
     visible: boolean;
     debug: boolean;
     tracking: TrackingDTO | null;
-    currentFrameSkip: number;
 }
 
 /** MediaPipe face-mesh indices, matching the native DebugHud. */
@@ -36,7 +35,7 @@ function optional(value: number | undefined | null, suffix: string, digits: numb
     return value === undefined || value === null ? "—" : `${value.toFixed(digits)}${suffix}`;
 }
 
-export function PerformanceOverlay({ metrics, visible, debug, tracking, currentFrameSkip }: Props) {
+export function PerformanceOverlay({ metrics, visible, debug, tracking }: Props) {
     const face = tracking?.face?.faces[0];
     const nose = face?.landmarks[NOSE_TIP];
     const hands = tracking?.hand?.hands ?? [];
@@ -59,7 +58,6 @@ export function PerformanceOverlay({ metrics, visible, debug, tracking, currentF
                     <Row label="CPU" value={optional(metrics.cpuUsagePercent, " %", 0)} />
                     <Row label="Thermal" value={metrics.thermalState ?? "—"} />
                     <Row label="Akku" value={optional(metrics.batteryLevel, " %", 0)} />
-                    <Row label="Frame-Skip" value={`${currentFrameSkip}`} />
                     <Row label="Warmup" value={metrics.warmupComplete ? "fertig" : "läuft"} />
                 </div>
             )}

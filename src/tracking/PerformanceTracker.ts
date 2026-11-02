@@ -384,9 +384,11 @@ export class PerformanceTracker {
     /**
      * F15/NF-comparability: a frame the pipeline saw but did not run inference on.
      *
-     * Two things produce one in the PWA: the dynamic-inference governor skipping
-     * a frame (`frameCount % frameSkip !== 0`), and a frame whose video timestamp
-     * had not advanced, which MediaPipe refuses. Both are genuinely dropped work.
+     * Two things produce one in the PWA: a frame that arrives while inference is
+     * still running, and a frame whose video timestamp had not advanced, which
+     * MediaPipe refuses. Both are genuinely dropped work and are counted as
+     * "busy". The third cause, the dynamic-inference governor skipping a frame,
+     * ended with the governor's removal on 2026-11-02; earlier sessions have it.
      *
      * This used to be declared, reset and submitted but never incremented, so every
      * PWA session reported a hard 0 — not a measurement, and directly misleading

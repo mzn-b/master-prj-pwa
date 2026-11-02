@@ -40,7 +40,6 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible={false}
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         expect(container.textContent).toBe("");
@@ -53,26 +52,24 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText("12.3 (Ø 11.5)")).toBeTruthy();
     });
 
     it("shows frames processed alongside frames dropped", () => {
-        // droppedFrames can legitimately exceed frameCount at a high frame-skip,
-        // so the two are always shown together rather than as a ratio.
+        // droppedFrames can legitimately exceed frameCount when inference is
+        // slower than the camera, so the two are always shown together rather
+        // than as a ratio.
         render(
             <PerformanceOverlay
                 metrics={metrics()}
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={4}
             />,
         );
         expect(screen.getByText("120 (30 verworfen)")).toBeTruthy();
-        expect(screen.getByText("4")).toBeTruthy();
     });
 
     it("renders an em dash for metrics the platform cannot supply", () => {
@@ -87,7 +84,6 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         // Four unavailable metrics — none of them may render as a number.
@@ -101,7 +97,6 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText("0 %")).toBeTruthy();
@@ -115,7 +110,6 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText("läuft")).toBeTruthy();
@@ -125,7 +119,6 @@ describe("PerformanceOverlay — metrics card", () => {
                 visible
                 debug={false}
                 tracking={null}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText("fertig")).toBeTruthy();
@@ -156,7 +149,6 @@ describe("PerformanceOverlay — debug card (F14)", () => {
                 visible={false}
                 debug={false}
                 tracking={tracking}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.queryByText("Debug")).toBeNull();
@@ -169,7 +161,6 @@ describe("PerformanceOverlay — debug card (F14)", () => {
                 visible={false}
                 debug
                 tracking={tracking}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText(/Gesicht: erkannt/)).toBeTruthy();
@@ -185,7 +176,6 @@ describe("PerformanceOverlay — debug card (F14)", () => {
                 visible={false}
                 debug
                 tracking={{ timestampMs: 1, mode: "face", face: { faces: [] } }}
-                currentFrameSkip={1}
             />,
         );
         expect(screen.getByText(/Gesicht: nicht erkannt/)).toBeTruthy();

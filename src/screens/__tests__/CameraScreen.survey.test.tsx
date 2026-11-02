@@ -8,8 +8,8 @@ afterEach(cleanup);
  * of the study's two conditions, the landmark view or the filter view with all
  * three filters (see CameraScreen.session.test.tsx); nothing else may be
  * changeable. Every run must use the
- * study settings (thesis §6.1.2): combined tracking, smoothing, the adaptive
- * inference rate and the GPU delegate on, inference on the main thread. Those
+ * study settings (thesis §6.1.2): combined tracking, smoothing and the GPU
+ * delegate on, inference on the main thread. Those
  * are the defaults, so hiding the controls fixes them there.
  *
  * The camera, the overlay renderer and the crown are stubbed: the test is about
@@ -17,7 +17,6 @@ afterEach(cleanup);
  */
 const MEASUREMENT_SETTINGS = [
     "F9: Glättung (One Euro)",
-    "F15: Dynamische Inferenzrate",
     "GPU-Delegate",
     "Performance-HUD",
     "F14: Debug-HUD",

@@ -57,6 +57,15 @@ class SampleSeries {
     }
 
     /**
+     * The samples in the order they were recorded, rounded to 0.01 ms, for the
+     * per-frame series submitted with the session (since 1.2.0). A copy, so
+     * the caller cannot alter the live array.
+     */
+    values(): number[] {
+        return this.samples.map((v) => Math.round(v * 100) / 100);
+    }
+
+    /**
      * Nearest-rank percentile: the smallest sample at or above the given rank.
      * No interpolation, so a reported p95 is a value that actually occurred.
      * `p` is 0..1. Sorts a copy, since ordering the live array would corrupt it.
@@ -586,7 +595,13 @@ export class PerformanceTracker {
         }
     }
 
-    getMetrics(): PerformanceMetricsDTO {
+    /**
+     * `withSeries` adds the per-frame series (since 1.2.0). Only the submission
+     * asks for them: the live HUD calls this every second, and copying two
+     * arrays of up to ~1,800 values each time would add allocations to the run
+     * being measured.
+     */
+    getMetrics(withSeries = false): PerformanceMetricsDTO {
         const now = performance.now();
         const sessionDuration = now - this.startTime;
         const avgFrameTime = this.frameTimes.average();
@@ -720,6 +735,8 @@ export class PerformanceTracker {
             frameIntervalP50Ms: round1(this.frameIntervalSeries.percentile(0.5)),
             frameIntervalP95Ms: round1(this.frameIntervalSeries.percentile(0.95)),
             frameIntervalP99Ms: round1(this.frameIntervalSeries.percentile(0.99)),
+            inferenceTimeSeriesMs: withSeries ? this.inferenceSeries.values() : undefined,
+            frameIntervalSeriesMs: withSeries ? this.frameIntervalSeries.values() : undefined,
 
             // PWA-only, and not by omission on the other side: native renders
             // declaratively through Skia with no equivalent point to time, so

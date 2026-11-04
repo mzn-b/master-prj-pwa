@@ -358,6 +358,27 @@ describe("PerformanceTracker percentiles", () => {
         expect(m.inferenceTimeP50Ms).toBeUndefined();
         expect(m.frameIntervalP95Ms).toBeUndefined();
     });
+
+    it("submits the per-frame series the percentiles are taken from, in order", () => {
+        // Since 1.2.0 the analysis recomputes the percentiles from these, so
+        // they must hold exactly the post-warm-up values, unsorted.
+        warmUp(500);
+        for (const ms of [12.345, 9, 15]) {
+            const start = t.recordFrameStart();
+            t.recordInferenceMs(ms);
+            vi.advanceTimersByTime(40);
+            t.recordFrameEnd(start, true);
+        }
+        const m = t.getMetrics(true);
+        expect(m.inferenceTimeSeriesMs).toEqual([12.35, 9, 15]);
+        expect(m.frameIntervalSeriesMs).toEqual([40, 40, 40]);
+    });
+
+    it("leaves the series out of the metrics read for the live display", () => {
+        warmUp();
+        expect(t.getMetrics().inferenceTimeSeriesMs).toBeUndefined();
+        expect(t.getMetrics().frameIntervalSeriesMs).toBeUndefined();
+    });
 });
 
 describe("PerformanceTracker detection quality", () => {

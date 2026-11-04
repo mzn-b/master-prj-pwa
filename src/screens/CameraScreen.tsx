@@ -183,7 +183,7 @@ export function CameraScreen() {
 
     const stop = useCallback(async () => {
         recordDrawnBackend();
-        const finalMetrics = performanceTrackerRef.current?.getMetrics();
+        const finalMetrics = performanceTrackerRef.current?.getMetrics(true);
         const sessionMode = sessionModeRef.current;
         // Reports what was DRAWN, not what was selected: landmarks mode never
         // mounts the filter overlay, and the selection survives a mode switch.
@@ -241,7 +241,7 @@ export function CameraScreen() {
     const handleFilterToggle = useCallback(async (id: FilterId) => {
         if (isRunning && performanceTrackerRef.current) {
             recordDrawnBackend();
-            const metrics = performanceTrackerRef.current.getMetrics();
+            const metrics = performanceTrackerRef.current.getMetrics(true);
             if (metrics.frameCount > 0) {
                 const currentlyActive = submittedFilters(
                     appModeRef.current,

@@ -48,6 +48,9 @@ export function CameraScreen() {
     const [activeFilters, setActiveFilters] = useState<ActiveFilters>(DEFAULT_ACTIVE_FILTERS);
 
     const [isTrackingActive, setIsTrackingActive] = useState(false);
+    // A run is under way from the moment Start is pressed until it stops,
+    // including the camera and model start-up before tracking is active.
+    const [runStarted, setRunStarted] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [warnings, setWarnings] = useState<string[]>([]);
     // A filter that fails to initialise draws nothing and says nothing; without
@@ -191,6 +194,7 @@ export function CameraScreen() {
         const currentlyActive = submittedFilters(appModeRef.current, activeFiltersRef.current);
 
         setIsTrackingActive(false);
+        setRunStarted(false);
 
         if (rafRef.current != null) {
             cancelAnimationFrame(rafRef.current);
@@ -231,8 +235,12 @@ export function CameraScreen() {
     }, [camera, recordDrawnBackend]);
 
     // The survey build ends every participant run after 60 s by itself, so run
-    // length does not depend on the operator's reaction (thesis §6.5.3).
-    useAutoStop(isRunning, SURVEY_BUILD, stop);
+    // length does not depend on the operator's reaction (thesis §6.5.3). The 60 s
+    // count from Start, when the session clock starts, as on native
+    // (useTracking.start). Counting from "tracking running" made a web session
+    // last its start-up plus 60 s, and a camera prompt answered during start-up
+    // pushed it past the analysis's 65-second limit (audit, 2026-11-04).
+    useAutoStop(runStarted, SURVEY_BUILD, stop);
 
     /**
      * Submit current session metrics and reset the tracker, then toggle the filter.
@@ -292,10 +300,14 @@ export function CameraScreen() {
         // implementations (thesis audit, 2026-10-28).
         const perfTracker = new PerformanceTracker();
         perfTracker.start();
+        setRunStarted(true);
 
         try {
             const cameraStarted = await camera.start();
-            if (!cameraStarted) return;
+            if (!cameraStarted) {
+                setRunStarted(false);
+                return;
+            }
 
             const video = videoRef.current;
             if (!video) throw new Error("Video element fehlt.");

@@ -467,6 +467,22 @@ describe("CameraScreen, survey build", () => {
         expect(submitted()[0].filters).toEqual([]);
     });
 
+    it("stops 60 s after Start, also when the camera took long to start", async () => {
+        await mount();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        // A camera prompt answered during start-up holds the start for 12 s.
+        let grantCamera: (ok: boolean) => void = () => {};
+        camera.start.mockImplementation(() => new Promise<boolean>(resolve => { grantCamera = resolve; }));
+        await start();
+        act(() => { vi.advanceTimersByTime(12_000); });
+        await act(async () => { grantCamera(true); });
+        detectedFrame();
+        act(() => { vi.advanceTimersByTime(60_000 - 12_000 - 1); });
+        expect(camera.stop).not.toHaveBeenCalled();
+        await act(async () => { vi.advanceTimersByTime(1); });
+        expect(camera.stop).toHaveBeenCalledTimes(1);
+    });
+
     it("runs with the study settings", async () => {
         await mount();
         await start();

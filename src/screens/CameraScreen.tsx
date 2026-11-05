@@ -650,11 +650,15 @@ export function CameraScreen() {
                         <div style={s.warning}>Filter-Fehler: {filterError}</div>
                     )}
                     <div style={s.buildStamp}>Build {APP_VERSION}{SURVEY_BUILD ? " (Studie)" : ""}</div>
-                    {warnings.map(w => (
-                        <div key={w} style={s.warning}>
-                            {w}
-                        </div>
-                    ))}
+                    {/* Hidden in survey builds: on the iPhone the list holds a warning
+                        that names Safari, which would tell participants which
+                        version is the web app (audit3 CODE1-6). */}
+                    {!SURVEY_BUILD &&
+                        warnings.map(w => (
+                            <div key={w} style={s.warning}>
+                                {w}
+                            </div>
+                        ))}
 
                     <div style={s.row}>
                         {(["landmarks", "filters"] as AppMode[]).map(candidate => (

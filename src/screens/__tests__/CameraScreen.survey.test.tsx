@@ -23,10 +23,32 @@ const MEASUREMENT_SETTINGS = [
     "Inferenz im Web Worker",
 ];
 const MODES = ["face", "hand", "combined"];
+// The warning iOS Safari's user agent triggers (TrackingConfig.ts). It names the
+// browser, so in a survey build it would tell participants which version is the
+// web app (audit3 CODE1-6).
+const SAFARI_WARNING = "Safari: Eingeschränkte WebGL-Performance möglich.";
 
 async function renderScreen(surveyBuild: boolean) {
     vi.resetModules();
     vi.doMock("../../config/surveyBuild", () => ({ SURVEY_BUILD: surveyBuild }));
+    vi.doMock("../../tracking/TrackingConfig", async () => {
+        const actual = await vi.importActual<typeof import("../../tracking/TrackingConfig")>(
+            "../../tracking/TrackingConfig",
+        );
+        return {
+            ...actual,
+            checkDeviceCapabilities: async () => ({
+                hasCamera: true,
+                hasWebGL: true,
+                hasWasm: true,
+                hasSufficientMemory: true,
+                isSecureContext: true,
+                browserSupported: true,
+                warnings: [SAFARI_WARNING],
+                errors: [],
+            }),
+        };
+    });
     vi.doMock("../../hooks", () => ({
         useCamera: () => ({ isActive: false, error: null, start: vi.fn(async () => false), stop: vi.fn() }),
     }));
@@ -68,6 +90,18 @@ describe("CameraScreen controls", () => {
     it("survey build: offers no tracking-mode choice", async () => {
         await renderScreen(true);
         for (const mode of MODES) expect(screen.queryByText(mode)).toBeNull();
+    });
+
+    it("full build: shows the device warnings", async () => {
+        await renderScreen(false);
+        expect(await screen.findByText(SAFARI_WARNING)).toBeTruthy();
+    });
+
+    it("survey build: shows no device warning, which would name the browser", async () => {
+        await renderScreen(true);
+        await screen.findByText(/\(Studie\)/);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(screen.queryByText(SAFARI_WARNING)).toBeNull();
     });
 
     it("survey build: offers none of the measurement settings", async () => {
